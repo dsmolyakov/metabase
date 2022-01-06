@@ -9,6 +9,24 @@
             [metabase.mbql.schema :as mbql.s]
             [metabase.util.schema :as su]))
 
+(defn- remove-namespaced-options [options]
+  (into {}
+        (remove (fn [[k _]]
+                  (when (keyword? k)
+                    (namespace k))))
+        options))
+
+(defn- remove-default-temporal-unit [{:keys [temporal-unit], :as options}]
+  (cond-> options
+    (= temporal-unit :default)
+    (dissoc :temporal-unit)))
+
+(defn normalize-clause [clause]
+  (cond-> clause
+    (mbql.u/is-clause? :field clause)
+    (mbql.u/update-field-options (comp remove-namespaced-options
+                                       remove-default-temporal-unit))))
+
 (defn- source-table-references [source-table-id join-alias]
   (when source-table-id
     (let [field-clauses (add-implicit-clauses/sorted-implicit-fields-for-table source-table-id)
@@ -20,34 +38,37 @@
       (qp.store/fetch-and-store-fields! field-ids)
       (into
        {}
-       (map (fn [clause]
-              [clause (if join-alias
-                        {:source {:table join-alias}}
-                        {})]))
+       (comp (map normalize-clause)
+             (map (fn [clause]
+                    [clause (if join-alias
+                              {:source {:table join-alias}}
+                              {})])))
        field-clauses))))
 
 (defn- add-alias-info [refs]
   (into
    {}
-   (map (fn [[clause info]]
-          (mbql.u/match-one clause
-            [:field (id :guard integer?) _opts]
-            (let [field      (qp.store/field id)
-                  field-name (:name field)
-                  #_table      #_(some-> (:table_id field) qp.store/table)]
-              [clause (assoc info :alias field-name)])
+   (comp (map (fn [[clause info]]
+                [(normalize-clause clause) info]))
+         (map (fn [[clause info]]
+                (mbql.u/match-one clause
+                  [:field (id :guard integer?) _opts]
+                  (let [field      (qp.store/field id)
+                        field-name (:name field)]
+                    [clause (assoc info :alias field-name)])
 
-            [:field (field-name :guard string?) _opts]
-            [clause (assoc info :alias field-name)]
+                  [:field (field-name :guard string?) _opts]
+                  [clause (assoc info :alias field-name)]
 
-            _
-            [clause info])))
+                  _
+                  [clause info]))))
    refs))
 
 (defn- selected-references [{:keys [fields breakout aggregation]}]
   (into
    {}
    (comp cat
+         (map normalize-clause)
          (map-indexed
           (fn [i clause]
             (mbql.u/match-one clause
@@ -76,6 +97,8 @@
    (comp (filter (fn [[_clause info]]
                    (:position info)))
          (map (fn [[clause info]]
+                [(normalize-clause clause) info]))
+         (map (fn [[clause info]]
                 (let [clause (mbql.u/match-one clause
                                :field
                                &match
@@ -101,17 +124,19 @@
 (defn- join-references [joins]
   (into
    {}
-   (mapcat (fn [{join-alias :alias, refs :qp/refs}]
-             (for [[clause info] refs
-                   :let          [info (assoc info
-                                              :source {:table join-alias, :alias (:alias info)}
-                                              ;; TODO -- this needs to use [[metabase.driver.sql.query-processor/prefix-field-alias]]
-                                              ;; or some new equivalent method
-                                              :alias (format "%s__%s" join-alias (or (get-in info [:source :alias])
-                                                                                     (:alias info))))]]
-               (mbql.u/match-one clause
-                 [:field id-or-name opts] [[:field id-or-name (assoc opts :join-alias join-alias)] info]
-                 _                        [clause info]))))
+   (comp (mapcat (fn [{join-alias :alias, refs :qp/refs}]
+                   (for [[clause info] refs
+                         :let          [info (assoc info
+                                                    :source {:table join-alias, :alias (:alias info)}
+                                                    ;; TODO -- this needs to use [[metabase.driver.sql.query-processor/prefix-field-alias]]
+                                                    ;; or some new equivalent method
+                                                    :alias (format "%s__%s" join-alias (or (get-in info [:source :alias])
+                                                                                           (:alias info))))]]
+                     (mbql.u/match-one clause
+                       [:field id-or-name opts] [[:field id-or-name (assoc opts :join-alias join-alias)] info]
+                       _                        [clause info]))))
+         (map (fn [[clause info]]
+                [(normalize-clause clause) info])))
    joins))
 
 (defn- uniquify-visible-ref-aliases [refs]
@@ -130,16 +155,16 @@
 
 (def ^:private QPRefs
   ;; TODO -- ensure unique `:position` ?
-  {mbql.s/FieldOrAggregationReference {:alias                     su/NonBlankString
-                                       (s/optional-key :position) s/Int
-                                       (s/optional-key :source)   {:table su/NonBlankString
-                                                                   :alias su/NonBlankString}}})
+  {mbql.s/FieldOrAggregationReference s/Any #_{:alias                     su/NonBlankString
+                                               (s/optional-key :position) s/Int
+                                               (s/optional-key :source)   {:table su/NonBlankString
+                                                                           :alias su/NonBlankString}}})
 
+;; NOCOMMIT
 (s/defn ^:private add-references* :- {s/Keyword s/Any
                                       :qp/refs QPRefs}
   [{:keys [source-table source-query source-metadata joins]
     join-alias :alias
-    #_refs #_:qp/refs
     :as inner-query}]
   (let [refs (-> (recursive-merge
                   (add-alias-info (source-table-references source-table join-alias))

@@ -1,6 +1,6 @@
 (ns metabase.query-processor.middleware.resolve-joins
-  "Middleware that fetches tables that will need to be joined, referred to by `fk->` clauses, and adds information to
-  the query about what joins should be done and how they should be performed."
+  "Middleware that fetches tables that will need to be joined, referred to by `:field` clauses with `:source-field`
+  options, and adds information to the query about what joins should be done and how they should be performed."
   (:refer-clojure :exclude [alias])
   (:require [metabase.mbql.schema :as mbql.s]
             [metabase.mbql.util :as mbql.u]

@@ -61,50 +61,46 @@
   [driver identifier]
   ((get-method sql.qp/->honeysql [:sql Identifier]) driver (CustomIdentifier. identifier sql.qp/*table-alias*)))
 
+(defn- mbql->native [query]
+  (mt/with-everything-store
+    (driver/with-driver :h2
+      (-> (sql.qp/mbql->native :h2 (qp/query->preprocessed query))
+          :query
+          sql.qp-test-util/pretty-sql))))
+
 (deftest generate-honeysql-for-join-test
   (testing "Test that the correct HoneySQL gets generated for a query with a join, and that the correct identifiers are used"
     (mt/with-everything-store
-      (is (= {:select    [[(hx/with-database-type-info (id :field "PUBLIC" "VENUES" "ID") "bigint")
-                           (id :field-alias "ID")]
-                          [(hx/with-database-type-info (id :field "PUBLIC" "VENUES" "NAME") "varchar")
-                           (id :field-alias "NAME")]
-                          [(hx/with-database-type-info (id :field "PUBLIC" "VENUES" "CATEGORY_ID") "integer")
-                           (id :field-alias "CATEGORY_ID")]
-                          [(hx/with-database-type-info (id :field "PUBLIC" "VENUES" "LATITUDE") "double")
-                           (id :field-alias "LATITUDE")]
-                          [(hx/with-database-type-info (id :field "PUBLIC" "VENUES" "LONGITUDE") "double")
-                           (id :field-alias "LONGITUDE")]
-                          [(hx/with-database-type-info (id :field "PUBLIC" "VENUES" "PRICE") "integer")
-                           (id :field-alias "PRICE")]]
-              :from      [(id :table "PUBLIC" "VENUES")]
-              :where     [:=
-                          (hx/with-database-type-info (bound-alias "c" (id :field "c" "NAME")) "varchar")
-                          "BBQ"]
-              :left-join [[(id :table "PUBLIC" "CATEGORIES") (id :table-alias "c")]
-                          [:=
-                           (hx/with-database-type-info (id :field "PUBLIC" "VENUES" "CATEGORY_ID") "integer")
-                           (hx/with-database-type-info (bound-alias "c" (id :field "c" "ID")) "bigint")]]
-              :order-by  [[(hx/with-database-type-info (id :field "PUBLIC" "VENUES" "ID") "bigint") :asc]]
-              :limit     100}
-             (#'sql.qp/mbql->honeysql
-              ::id-swap
-              (qp/query->preprocessed
-               (mt/mbql-query venues
-                 {:source-table $$venues
-                  :order-by     [[:asc $id]]
-                  :filter       [:=
-                                 &c.categories.name
-                                 [:value "BBQ" {:base_type :type/Text, :semantic_type :type/Name, :database_type "VARCHAR"}]]
-                  :fields       [$id $name $category_id $latitude $longitude $price]
-                  :limit        100
-                  :joins        [{:source-table $$categories
-                                  :alias        "c"
-                                  :strategy     :left-join
-                                  :condition    [:=
-                                                 $category_id
-                                                 &c.categories.id]
-                                  :fk-field-id  (mt/id :venues :category_id)
-                                  :fields       :none}]}))))))))
+      (is (= '{:select    [VENUES.ID AS ID
+                           VENUES.NAME AS NAME
+                           VENUES.CATEGORY_ID AS CATEGORY_ID
+                           VENUES.LATITUDE AS LATITUDE
+                           VENUES.LONGITUDE AS LONGITUDE
+                           VENUES.PRICE AS PRICE]
+               :from      [VENUES]
+               :left-join [CATEGORIES c
+                           ON VENUES.CATEGORY_ID = c.ID]
+               :where     [c.NAME = ?]
+               :order-by  [VENUES.ID ASC]
+               :limit     [100]}
+             (-> (mt/mbql-query venues
+                   {:source-table $$venues
+                    :order-by     [[:asc $id]]
+                    :filter       [:=
+                                   &c.categories.name
+                                   [:value "BBQ" {:base_type :type/Text, :semantic_type :type/Name, :database_type "VARCHAR"}]]
+                    :fields       [$id $name $category_id $latitude $longitude $price]
+                    :limit        100
+                    :joins        [{:source-table $$categories
+                                    :alias        "c"
+                                    :strategy     :left-join
+                                    :condition    [:=
+                                                   $category_id
+                                                   &c.categories.id]
+                                    :fk-field-id  (mt/id :venues :category_id)
+                                    :fields       :none}]})
+                 mbql->native
+                 sql.qp-test-util/sql->sql-map))))))
 
 (deftest correct-identifiers-test
   (testing "This HAIRY query tests that the correct identifiers and aliases are used with both a nested query and JOIN in play."
@@ -275,13 +271,6 @@
                 :joins       [{:source-table $$users
                                :alias        "u"
                                :condition    [:= $user_id &u.users.id]}]}))))))
-
-(defn- mbql->native [query]
-  (mt/with-everything-store
-    (driver/with-driver :postgres ; NOCOMMIT
-      (-> (sql.qp/mbql->native :postgres (qp/query->preprocessed query))
-          :query
-          sql.qp-test-util/pretty-sql))))
 
 (deftest joined-field-clauses-test
   (testing "Should correctly compile `:field` clauses with `:join-alias`"
@@ -528,6 +517,30 @@
             (is (schema= [(s/one s/Str "date")
                           (s/one s/Num "expression")]
                          (-> results mt/rows first)))))))))
+
+(deftest nested-mbql-source-query-test
+  (is (= '{:select    [VENUES.ID AS ID
+                       VENUES.NAME AS NAME
+                       VENUES.CATEGORY_ID AS CATEGORY_ID
+                       VENUES.LATITUDE AS LATITUDE
+                       VENUES.LONGITUDE AS LONGITUDE
+                       VENUES.PRICE AS PRICE]
+           :from      [VENUES]
+           :left-join [{:select [CATEGORIES.ID AS ID
+                                 CATEGORIES.NAME AS NAME]
+                        :from   [CATEGORIES]} cat
+                       ON VENUES.CATEGORY_ID = cat.ID]
+           :order-by  [VENUES.NAME ASC]
+           :limit     [3]}
+         (-> (mt/mbql-query venues
+               {:source-table $$venues
+                :joins        [{:alias        "cat"
+                                :source-query {:source-table $$categories}
+                                :condition    [:= $category_id &cat.*categories.id]}]
+                :order-by     [[:asc $name]]
+                :limit        3})
+             mbql->native
+             sql.qp-test-util/sql->sql-map))))
 
 (defn- preprocessed-mbql->sql-map [mbql driver]
   (driver/with-driver driver

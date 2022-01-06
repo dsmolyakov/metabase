@@ -12,7 +12,8 @@
             [metabase.util.i18n :refer [tru]]
             [metabase.util.schema :as su]
             [schema.core :as s]
-            [toucan.db :as db]))
+            [toucan.db :as db]
+            [clojure.walk :as walk]))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                              Add Implicit Fields                                               |
@@ -30,8 +31,12 @@
 (defn- table->sorted-fields
   "Return a sequence of all Fields for table that we'd normally include in the equivalent of a `SELECT *`."
   [table-id]
-  ;; cache duplicate calls to this function in the same QP run.
-  (qp.store/cached-fn [::table-sorted-fields (u/the-id table-id)] #(table->sorted-fields* table-id)))
+  (if (qp.store/initialized?)
+    ;; cache duplicate calls to this function in the same QP run.
+    (qp.store/cached-fn [::table-sorted-fields (u/the-id table-id)] #(table->sorted-fields* table-id))
+    ;; if QP store is not initialized don't try to cache the value (this is mainly for the benefit of tests and code
+    ;; that uses this outside of the normal QP execution context)
+    (table->sorted-fields* table-id)))
 
 (s/defn sorted-implicit-fields-for-table :- mbql.s/Fields
   "For use when adding implicit Field IDs to a query. Return a sequence of field clauses, sorted by the rules listed
@@ -129,14 +134,17 @@
 
 (defn add-implicit-mbql-clauses
   "Add implicit clauses such as `:fields` and `:order-by` to an 'inner' MBQL query as needed."
-  [{:keys [source-query], :as inner-query}]
-  (let [mbql-source-query? (and source-query (not (:native source-query)))
-        inner-query        (-> inner-query add-implicit-breakout-order-by add-implicit-fields)]
-    (if mbql-source-query?
-      ;; if query has an MBQL source query recursively add implicit clauses to that too as needed
-      (update inner-query :source-query add-implicit-mbql-clauses)
-      ;; otherwise we're done
-      inner-query)))
+  [form]
+  (walk/postwalk
+   (fn [form]
+     ;; add implicit clauses to any 'inner query', except for joins themselves (we should still add implicit clauses
+     ;; like `:fields` to source queries *inside* joins)
+     (if (and (map? form)
+              ((some-fn :source-table :source-query) form)
+              (not (:condition form)))
+       (-> form add-implicit-breakout-order-by add-implicit-fields)
+       form))
+   form))
 
 (defn- maybe-add-implicit-clauses [{query-type :type, :as query}]
   (if (= query-type :native)

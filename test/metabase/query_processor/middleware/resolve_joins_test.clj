@@ -268,3 +268,35 @@
                                :field_ref     [:aggregation 0]
                                :fingerprint   nil}]}]
                    :limit  10}))))))
+
+(deftest join-against-source-query-test
+  (is (query= (mt/mbql-query venues
+                {:joins    [{:source-query {:source-table $$categories
+                                            :fields       [$categories.id
+                                                           $categories.name]}
+                             :alias        "cat"
+                             :condition    [:= $venues.category_id &cat.*ID/BigInteger]
+                             :strategy     :left-join}]
+                 :fields   [$venues.id
+                            $venues.name
+                            $venues.category_id
+                            $venues.latitude
+                            $venues.longitude
+                            $venues.price]
+                 :order-by [[:asc $venues.name]]
+                 :limit    3})
+              (resolve-joins
+               (mt/mbql-query venues
+                 {:joins    [{:source-query {:source-table $$categories
+                                             :fields       [$categories.id
+                                                            $categories.name]}
+                              :alias        "cat"
+                              :condition    [:= $venues.category_id &cat.*ID/BigInteger]}]
+                  :fields   [$venues.id
+                             $venues.name
+                             $venues.category_id
+                             $venues.latitude
+                             $venues.longitude
+                             $venues.price]
+                  :order-by [[:asc $venues.name]]
+                  :limit    3})))))

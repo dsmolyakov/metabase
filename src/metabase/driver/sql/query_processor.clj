@@ -380,46 +380,12 @@
       (hx/* bin-width)
       (hx/+ min-value)))
 
-;; NOCOMMIT
-#_(defn- field-ref-info [field-clause]
-  (or (u/prog1 (get-in *query* [:qp/refs field-clause])
-        ;; NOCOMMIT
-        (println (format "%-35s -[INFO]-> %s"
-                         (u/colorize 'yellow (pr-str (last (dev.debug-qp/to-mbql-shorthand field-clause))))
-                         (u/colorize 'magenta (pr-str <>)))))
-      ;; NOCOMMIT
-      (println (format "WARNING: NO FIELD REF INFO FOR %s.\nREFS:\n%s"
-                       (u/colorize 'red (pr-str (last (dev.debug-qp/to-mbql-shorthand field-clause))))
-                       (u/pprint-to-str (-> (dev.debug-qp/to-mbql-shorthand (select-keys *query* [:qp/refs]))
-                                            last
-                                            :qp/refs))))
-      ;; HACK HACK HACK HACK
-      (when-let [closest-match (mbql.u/match-one field-clause
-                                 [:field id-or-name _]
-                                 (some (fn [[a-clause info]]
-                                         (mbql.u/match-one a-clause
-                                           [:field an-id-or-name _]
-                                           (when (= an-id-or-name id-or-name)
-                                             info)))
-                                       (:qp/refs *query*)))]
-        (println (format "USING CLOSEST MATCH => %s" (u/colorize 'cyan (pr-str closest-match))))
-        closest-match)))
-
-(defn- remove-namespaced-options [options]
-  (into {}
-        (remove (fn [[k _]]
-                  (when (keyword? k)
-                    (namespace k))))
-        options))
-
-(defn- field-ref-info [field-clause]
-  (let [field-clause (cond-> field-clause
-                       (mbql.u/is-clause? :field field-clause)
-                       (mbql.u/update-field-options remove-namespaced-options))]
-    (or (get-in *query* [:qp/refs field-clause])
+(defn- field-ref-info [clause]
+  (let [clause (add-references/normalize-clause clause)]
+    (or (get-in *query* [:qp/refs clause])
         ;; HACK HACK HACK HACK Ideally we shouldn't have to do any of this 'closest match' nonsense. We need to add
-        ;; middleware to fix bad references automatically instead of doing this HERE.
-        (let [[closest-match info] (mbql.u/match-one field-clause
+        ;; middleware to reconcile/fix bad references automatically instead of doing this HERE.
+        (let [[closest-match info] (mbql.u/match-one clause
                                      [:field id-or-name _]
                                      (some (fn [[a-clause info]]
                                              (mbql.u/match-one a-clause
@@ -427,7 +393,7 @@
                                                (when (= an-id-or-name id-or-name)
                                                  [a-clause info])))
                                            (:qp/refs *query*)))]
-          (log/warnf (str/join \newline [(trs "Missing Field ref info for {0}" (u/colorize 'red (pr-str field-clause)))
+          (log/warnf (str/join \newline [(trs "Missing Field ref info for {0}" (u/colorize 'red (pr-str clause)))
                                          (trs "Field refs:")
                                          (u/pprint-to-str (:qp/refs *query*))
                                          (trs "Using closest match {0} {1}" (u/colorize 'cyan (pr-str closest-match)) (u/colorize 'yellow info))]))
@@ -1061,9 +1027,6 @@
 (defn mbql->native
   "Transpile MBQL query into a native SQL statement."
   [driver {database :database, :as outer-query}]
-  ;; NOCOMMIT
-  (println "QUERY =>")
-  (println (u/pprint-to-str 'yellow (add-references/add-references outer-query)))
   (let [honeysql-form (mbql->honeysql driver (add-references/add-references outer-query))
         [sql & args]  (format-honeysql driver honeysql-form)]
     {:query sql, :params args}))

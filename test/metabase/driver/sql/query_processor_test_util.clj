@@ -35,7 +35,7 @@
           (recur m x-y (rest more)))
 
         ;; one-word keywords
-        ('#{SELECT FROM LIMIT} x)
+        ('#{SELECT FROM LIMIT WHERE OFFSET} x)
         (let [x (keyword (str/lower-case x))]
           (recur m x more))
 
