@@ -21,6 +21,16 @@
   (binding [*read-eval* false]
     (read-string (str \( s \)))))
 
+(def ^:private sql-keywords
+  '#{[LEFT JOIN]
+     [GROUP BY]
+     [ORDER BY]
+     SELECT
+     FROM
+     LIMIT
+     WHERE
+     OFFSET})
+
 (defn- sql-map
   "Convert a sequence of SQL symbols into something sorta like a HoneySQL map. The main purpose of this is to make tests
   somewhat possible to debug. The goal isn't to actually be HoneySQL, but rather to make diffing huge maps easy."
@@ -30,18 +40,20 @@
     (loop [m {}, current-key nil, [x & [y :as more]] symbols]
       (cond
         ;; two-word "keywords"
-        ('#{[LEFT JOIN] [GROUP BY] [ORDER BY]} [x y])
+        (sql-keywords [x y])
         (let [x-y (keyword (str/lower-case (format "%s-%s" (name x) (name y))))]
           (recur m x-y (rest more)))
 
         ;; one-word keywords
-        ('#{SELECT FROM LIMIT WHERE OFFSET} x)
+        (sql-keywords x)
         (let [x (keyword (str/lower-case x))]
           (recur m x more))
 
+        ;; if we stumble upon a nested sequence that starts with SQL keyword(s) then recursively transform that into a
+        ;; map (e.g. for things like subselects)
         (and (sequential? x)
-             (some? current-key)
-             (empty? (get m current-key)))
+             (or (sql-keywords (take 2 x))
+                 (sql-keywords (first x))))
         (recur m current-key (cons (sql-map x) more))
 
         :else

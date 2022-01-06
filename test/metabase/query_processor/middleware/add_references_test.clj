@@ -85,17 +85,17 @@
       (add-references/add-references query))))
 
 (deftest expressions-test
-  (is (= (mt/mbql-query venues
-           {:expressions {"double_id" [:* $id 2]}
-            :qp/refs     {$category_id {:alias "CATEGORY_ID"}
-                          $id          {:alias "ID"}
-                          $latitude    {:alias "LATITUDE"}
-                          $longitude   {:alias "LONGITUDE"}
-                          $name        {:alias "NAME"}
-                          $price       {:alias "PRICE"}}})
-         (add-references
-          (mt/mbql-query venues
-            {:expressions {"double_id" [:* $id 2]}}))))
+  (is (query= (mt/mbql-query venues
+                {:expressions {"double_id" [:* $id 2]}
+                 :qp/refs     {$category_id {:alias "CATEGORY_ID"}
+                               $id          {:alias "ID"}
+                               $latitude    {:alias "LATITUDE"}
+                               $longitude   {:alias "LONGITUDE"}
+                               $name        {:alias "NAME"}
+                               $price       {:alias "PRICE"}}})
+              (add-references
+               (mt/mbql-query venues
+                 {:expressions {"double_id" [:* $id 2]}}))))
 
   (testing ":expression in :fields"
     (is (= (mt/mbql-query venues
@@ -126,13 +126,13 @@
                                             $price                    {:position 5, :alias "PRICE"}
                                             [:expression "double_id"] {:position 6, :alias "double_id"}}}
               :fields       [$id $name $category_id $latitude $longitude $price *double_id/Float]
-              :qp/refs      {$id                                           {:position 0, :alias "ID", :source {:table "source", :alias "ID"}},
-                             $name                                         {:position 1, :alias "NAME", :source {:table "source", :alias "NAME"}},
-                             $category_id                                  {:position 2, :alias "CATEGORY_ID", :source {:table "source", :alias "CATEGORY_ID"}},
-                             $latitude                                     {:position 3, :alias "LATITUDE", :source {:table "source", :alias "LATITUDE"}},
-                             $longitude                                    {:position 4, :alias "LONGITUDE", :source {:table "source", :alias "LONGITUDE"}},
-                             $price                                        {:position 5, :alias "PRICE", :source {:table "source", :alias "PRICE"}},
-                             [:field "double_id" {:base-type :type/Float}] {:position 6, :alias "double_id", :source {:table "source", :alias "double_id"}}}})
+              :qp/refs      {$id                                           {:position 0, :alias "ID", :source {:table ::add-references/source, :alias "ID"}}
+                             $name                                         {:position 1, :alias "NAME", :source {:table ::add-references/source, :alias "NAME"}}
+                             $category_id                                  {:position 2, :alias "CATEGORY_ID", :source {:table ::add-references/source, :alias "CATEGORY_ID"}}
+                             $latitude                                     {:position 3, :alias "LATITUDE", :source {:table ::add-references/source, :alias "LATITUDE"}}
+                             $longitude                                    {:position 4, :alias "LONGITUDE", :source {:table ::add-references/source, :alias "LONGITUDE"}}
+                             $price                                        {:position 5, :alias "PRICE", :source {:table ::add-references/source, :alias "PRICE"}}
+                             [:field "double_id" {:base-type :type/Float}] {:position 6, :alias "double_id", :source {:table ::add-references/source, :alias "double_id"}}}})
            (add-references
             (mt/mbql-query venues
               {:source-query {:source-table $$venues
@@ -140,7 +140,41 @@
                               :fields       [$id $name $category_id $latitude $longitude $price [:expression "double_id"]]}
                :fields       [$id $name $category_id $latitude $longitude $price *double_id/Float]}))))))
 
-;; TODO -- native query with source metadata test.
+(deftest native-query-refs-test
+  (let [native-query (mt/native-query {:query "SELECT * FROM VENUES LIMIT 5;"})
+        metadata     (-> (qp/process-query native-query)
+                         :data
+                         :results_metadata
+                         :columns)
+        mbql-query   (mt/mbql-query nil
+                       {:source-query    {:native "SELECT * FROM VENUES LIMIT 5;"}
+                        :source-metadata metadata})]
+    (is (query= (assoc-in mbql-query [:query :qp/refs]
+                          {[:field "ID" {:base-type :type/BigInteger}]       {:source   {:table ::add-references/source
+                                                                                         :alias "ID"}
+                                                                              :position 0
+                                                                              :alias    "ID"}
+                           [:field "NAME" {:base-type :type/Text}]           {:source   {:table ::add-references/source
+                                                                                         :alias "NAME"}
+                                                                              :position 1
+                                                                              :alias    "NAME"}
+                           [:field "CATEGORY_ID" {:base-type :type/Integer}] {:source   {:table ::add-references/source
+                                                                                         :alias "CATEGORY_ID"}
+                                                                              :position 2
+                                                                              :alias    "CATEGORY_ID"}
+                           [:field "LATITUDE" {:base-type :type/Float}]      {:source   {:table ::add-references/source
+                                                                                         :alias "LATITUDE"}
+                                                                              :position 3
+                                                                              :alias    "LATITUDE"}
+                           [:field "LONGITUDE" {:base-type :type/Float}]     {:source   {:table ::add-references/source
+                                                                                         :alias "LONGITUDE"}
+                                                                              :position 4
+                                                                              :alias    "LONGITUDE"}
+                           [:field "PRICE" {:base-type :type/Integer}]       {:source   {:table ::add-references/source
+                                                                                         :alias "PRICE"}
+                                                                              :position 5
+                                                                              :alias    "PRICE"}})
+                (add-references mbql-query)))))
 
 (deftest mega-query-refs-test
   (testing "Should generate correct SQL for joins against source queries that contain joins (#12928)"
@@ -224,9 +258,9 @@
                                                &P2.products.rating              {:source {:table "P2", :alias "RATING"}, :alias "P2__RATING"}
                                                [:aggregation 0]                 {:alias "avg", :position 1}}}}]
                :limit   2
-               :qp/refs {&P1.products.category {:position 0, :alias "P1__CATEGORY", :source {:table "source", :alias "P1__CATEGORY"}}
-                         &People.people.source {:position 1, :alias "People__SOURCE", :source {:table "source", :alias "People__SOURCE"}}
-                         *count/BigInteger     {:position 2, :alias "count", :source {:alias "count", :table "source"}}
+               :qp/refs {&P1.products.category {:position 0, :alias "P1__CATEGORY", :source {:table ::add-references/source, :alias "P1__CATEGORY"}}
+                         &People.people.source {:position 1, :alias "People__SOURCE", :source {:table ::add-references/source, :alias "People__SOURCE"}}
+                         *count/BigInteger     {:position 2, :alias "count", :source {:alias "count", :table ::add-references/source}}
                          &Q2.products.category {:position 3, :alias "Q2__P2__CATEGORY", :source {:table "Q2", :alias "P2__CATEGORY"}}
                          &Q2.*avg/Integer      {:position 4, :alias "Q2__avg", :source {:table "Q2", :alias "avg"}}}}
              (-> (mt/mbql-query nil

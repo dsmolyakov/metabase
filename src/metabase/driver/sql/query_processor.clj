@@ -180,7 +180,7 @@
 
   Return `nil` to prevent `field` from being aliased.
 
-  DEPRECATED as of x.41.  This multimethod will be removed in a future release.  Instead, drivers will simply
+  DEPRECATED as of x.42.  This multimethod will be removed in a future release.  Instead, drivers will simply
   override the `escape-alias` multimethod if they want to influence the alias to be used for a given field name."
   {:arglists '([driver field]), :deprecated "0.42.0"}
   driver/dispatch-on-initialized-driver
@@ -381,30 +381,16 @@
       (hx/+ min-value)))
 
 (defn- field-ref-info [clause]
-  (let [clause (add-references/normalize-clause clause)]
-    (or (get-in *query* [:qp/refs clause])
-        ;; HACK HACK HACK HACK Ideally we shouldn't have to do any of this 'closest match' nonsense. We need to add
-        ;; middleware to reconcile/fix bad references automatically instead of doing this HERE.
-        (let [[closest-match info] (mbql.u/match-one clause
-                                     [:field id-or-name _]
-                                     (some (fn [[a-clause info]]
-                                             (mbql.u/match-one a-clause
-                                               [:field an-id-or-name _]
-                                               (when (= an-id-or-name id-or-name)
-                                                 [a-clause info])))
-                                           (:qp/refs *query*)))]
-          (log/warnf (str/join \newline [(trs "Missing Field ref info for {0}" (u/colorize 'red (pr-str clause)))
-                                         (trs "Field refs:")
-                                         (u/pprint-to-str (:qp/refs *query*))
-                                         (trs "Using closest match {0} {1}" (u/colorize 'cyan (pr-str closest-match)) (u/colorize 'yellow info))]))
-          info))))
+  (add-references/field-ref-info *query* clause))
 
 (defmethod ->honeysql [:sql :field]
   [driver [_ field-id-or-name options :as field-clause]]
   (let [ref-info     (field-ref-info field-clause)
         source-alias (get-in ref-info [:source :alias])
-        table-alias  (or (get-in ref-info [:source :table])
-                         *table-alias*)
+        table-alias  (get-in ref-info [:source :table])
+        table-alias (if (= table-alias ::add-references/source)
+                      source-query-alias
+                      table-alias)
         options      (cond-> options
                        source-alias (assoc ::source-alias source-alias)
                        table-alias  (assoc ::table-alias table-alias))]
@@ -1016,9 +1002,10 @@
 (defn mbql->honeysql
   "Build the HoneySQL form we will compile to SQL and execute."
   [driver {inner-query :query}]
-  (u/prog1 (apply-clauses driver {} (preprocess-query driver inner-query))
-    (when-not i/*disable-qp-logging*
-      (log/tracef "\nHoneySQL Form: %s\n%s" (u/emoji "🍯") (u/pprint-to-str 'cyan <>)))))
+  (let [inner-query (add-references/add-references inner-query)]
+    (u/prog1 (apply-clauses driver {} (preprocess-query driver inner-query))
+      (when-not i/*disable-qp-logging*
+        (log/tracef "\nHoneySQL Form: %s\n%s" (u/emoji "🍯") (u/pprint-to-str 'cyan <>))))))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                                 MBQL -> Native                                                 |
@@ -1027,6 +1014,6 @@
 (defn mbql->native
   "Transpile MBQL query into a native SQL statement."
   [driver {database :database, :as outer-query}]
-  (let [honeysql-form (mbql->honeysql driver (add-references/add-references outer-query))
+  (let [honeysql-form (mbql->honeysql driver outer-query)
         [sql & args]  (format-honeysql driver honeysql-form)]
     {:query sql, :params args}))

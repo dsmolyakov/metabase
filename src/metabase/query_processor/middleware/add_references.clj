@@ -1,13 +1,17 @@
 (ns metabase.query-processor.middleware.add-references
-  (:require [clojure.walk :as walk]
+  "TODO -- consider moving this into a QP util namespace?"
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :as log]
+            [clojure.walk :as walk]
+            [metabase.mbql.schema :as mbql.s]
             [metabase.mbql.util :as mbql.u]
             [metabase.query-processor.middleware.add-implicit-clauses :as add-implicit-clauses]
+            [metabase.query-processor.middleware.add-references :as add-references]
+            [metabase.query-processor.middleware.annotate :as annotate]
             [metabase.query-processor.store :as qp.store]
             [metabase.util :as u]
-            [metabase.query-processor.middleware.annotate :as annotate]
-            [schema.core :as s]
-            [metabase.mbql.schema :as mbql.s]
-            [metabase.util.schema :as su]))
+            [metabase.util.i18n :refer [trs]]
+            [schema.core :as s]))
 
 (defn- remove-namespaced-options [options]
   (into {}
@@ -26,6 +30,25 @@
     (mbql.u/is-clause? :field clause)
     (mbql.u/update-field-options (comp remove-namespaced-options
                                        remove-default-temporal-unit))))
+
+(defn field-ref-info [query clause]
+  (let [clause (normalize-clause clause)]
+    (or (get-in query [:qp/refs clause])
+        ;; HACK HACK HACK HACK Ideally we shouldn't have to do any of this 'closest match' nonsense. We need to add
+        ;; middleware to reconcile/fix bad references automatically
+        (let [[closest-match info] (mbql.u/match-one clause
+                                     [:field id-or-name _]
+                                     (some (fn [[a-clause info]]
+                                             (mbql.u/match-one a-clause
+                                               [:field an-id-or-name _]
+                                               (when (= an-id-or-name id-or-name)
+                                                 [a-clause info])))
+                                           (:qp/refs query)))]
+          (log/warnf (str/join \newline [(trs "Missing Field ref info for {0}" (u/colorize 'red (pr-str clause)))
+                                         (trs "Field refs:")
+                                         (u/pprint-to-str (:qp/refs query))
+                                         (trs "Using closest match {0} {1}" (u/colorize 'cyan (pr-str closest-match)) (u/colorize 'yellow info))]))
+          info))))
 
 (defn- source-table-references [source-table-id join-alias]
   (when source-table-id
@@ -89,9 +112,8 @@
      aggregation)
     fields]))
 
-;; TODO FIXME need to make sure we handle native source queries -- determine refs from `:source-metadata` (especially for native queries!)
-(defn- source-query-references
-  [{refs :qp/refs, aggregations :aggregation, :keys [expressions], :as source-query} _source-metadata]
+(defn- mbql-source-query-references
+  [{refs :qp/refs, aggregations :aggregation, :keys [expressions], :as source-query}]
   (into
    {}
    (comp (filter (fn [[_clause info]]
@@ -116,10 +138,22 @@
                                _
                                clause)
                       info (-> info
-                               (assoc :source {:table "source", :alias (:alias info)})
+                               (assoc :source {:table ::source, :alias (:alias info)})
                                (dissoc :position))]
                   [clause info]))))
    refs))
+
+(defn- native-source-query-references [source-query source-metadata]
+  (when (:native source-query)
+    (into {}
+          (comp (map (fn [{field-name :name, base-type :base_type}]
+                       [[:field field-name {:base-type base-type}] {:alias field-name
+                                                                    :source {:table ::source, :alias field-name}}]))
+                (map (fn [[clause info]]
+                       [(normalize-clause clause) info]))
+                (map-indexed (fn [i [clause info]]
+                               [clause (assoc info :position i)])))
+          source-metadata)))
 
 (defn- join-references [joins]
   (into
@@ -155,12 +189,12 @@
 
 (def ^:private QPRefs
   ;; TODO -- ensure unique `:position` ?
+  ;; NOCOMMIT
   {mbql.s/FieldOrAggregationReference s/Any #_{:alias                     su/NonBlankString
                                                (s/optional-key :position) s/Int
                                                (s/optional-key :source)   {:table su/NonBlankString
                                                                            :alias su/NonBlankString}}})
 
-;; NOCOMMIT
 (s/defn ^:private add-references* :- {s/Keyword s/Any
                                       :qp/refs QPRefs}
   [{:keys [source-table source-query source-metadata joins]
@@ -169,7 +203,8 @@
   (let [refs (-> (recursive-merge
                   (add-alias-info (source-table-references source-table join-alias))
                   (add-alias-info (selected-references inner-query))
-                  (source-query-references source-query source-metadata)
+                  (mbql-source-query-references source-query)
+                  (native-source-query-references source-query source-metadata)
                   (join-references joins))
                  uniquify-visible-ref-aliases)]
     (assoc inner-query :qp/refs refs)))
