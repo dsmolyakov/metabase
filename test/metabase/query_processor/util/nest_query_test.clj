@@ -135,23 +135,6 @@
        x))
    x))
 
-(defn y []
-  (qp/query->preprocessed (mt/mbql-query venues
-                            {:joins       [{:strategy     :left-join
-                                            :condition    [:= $category_id &CategoriesStats.category_id]
-                                            :source-query {:source-table $$venues
-                                                           :aggregation  [[:aggregation-options [:max $price] {:name "MaxPrice"}]
-                                                                          [:aggregation-options [:avg $price] {:name "AvgPrice"}]
-                                                                          [:aggregation-options [:min $price] {:name "MinPrice"}]]
-                                                           :breakout     [$category_id]
-                                                           :order-by     [[:asc $category_id]]}
-                                            :alias        "CategoriesStats"
-                                            :fields       [&CategoriesStats.category_id
-                                                           &CategoriesStats.*MaxPrice/Integer
-                                                           &CategoriesStats.*AvgPrice/Integer
-                                                           &CategoriesStats.*MinPrice/Integer]}]
-                             :expressions {:RelativePrice [:/ $price &CategoriesStats.*AvgPrice/Integer]}})))
-
 (deftest nest-expressions-with-joins-test
   (testing "If there are any `:joins`, those need to be nested into the `:source-query` as well."
     (is (query= (mt/$ids venues

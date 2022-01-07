@@ -81,11 +81,11 @@
                                        CHECKINS.DATE AS DATE
                                        CHECKINS.USER_ID AS USER_ID
                                        CHECKINS.VENUE_ID AS VENUE_ID]
-                              :from   [CHECKINS],
+                              :from   [CHECKINS]
                               :where  [CHECKINS.DATE > ?]}
-                             source],
+                             source]
                  :left-join [VENUES v
-                             ON source.VENUE_ID = v.ID],
+                             ON source.VENUE_ID = v.ID]
                  :where     [((v.NAME like ?) AND source.USER_ID > 0)]
                  :group-by  [v.NAME]
                  :order-by  [v.NAME ASC]}
@@ -597,9 +597,32 @@
                             :condition    [:= $category_id &CATEGORIES__via__CATEGORY_ID.categories.id]
                             :strategy     :left-join}]
                 :fields   [$name
-                           $category_id->&CATEGORIES__via__CATEGORY_ID.categories.name],
+                           $category_id->&CATEGORIES__via__CATEGORY_ID.categories.name]
                 :order-by [[:asc $id]]
                 :limit    5})
+             mbql->native
+             sql.qp-test-util/sql->sql-map))))
+
+(deftest another-source-query-test
+  (is (= '{:select [source.DATE AS DATE
+                    source.sum AS sum
+                    source.sum_2 AS sum_2]
+           :from   [{:select   [parsedatetime (formatdatetime (CHECKINS.DATE "yyyyMM") "yyyyMM") AS DATE
+                                sum (CHECKINS.USER_ID) AS sum
+                                sum (CHECKINS.VENUE_ID) AS sum_2]
+                     :from     [CHECKINS]
+                     :group-by [parsedatetime (formatdatetime (CHECKINS.DATE "yyyyMM") "yyyyMM")]
+                     :order-by [parsedatetime (formatdatetime (CHECKINS.DATE "yyyyMM") "yyyyMM") ASC]}
+                    source]
+           :where  [source.sum > 300]
+           :limit  [2]}
+         (-> (mt/mbql-query checkins
+               {:source-query {:source-table $$checkins
+                               :aggregation  [[:sum $user_id]
+                                              [:sum $venue_id]]
+                               :breakout     [!month.date]}
+                :filter       [:> *sum/Float 300]
+                :limit        2})
              mbql->native
              sql.qp-test-util/sql->sql-map))))
 

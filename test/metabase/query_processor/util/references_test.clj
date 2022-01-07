@@ -445,6 +445,40 @@
                    :order-by [[:asc $id]]
                    :limit    5}))))))
 
+(deftest another-source-query-test
+  (is (query= (mt/mbql-query checkins
+                {:source-query {:source-table $$checkins
+                                :breakout     [!month.date]
+                                :aggregation  [[:aggregation-options [:sum $user_id] {:name "sum"}]
+                                               [:aggregation-options [:sum $venue_id] {:name "sum_2"}]]
+                                :order-by     [[:asc !month.date]]
+                                :qp/refs      {!month.date      {:alias "DATE", :position 0}
+                                               $date            {:alias "DATE"}
+                                               $id              {:alias "ID"}
+                                               $user_id         {:alias "USER_ID"}
+                                               $venue_id        {:alias "VENUE_ID"}
+                                               [:aggregation 0] {:alias "sum", :position 1}
+                                               [:aggregation 1] {:alias "sum_2", :position 2}}}
+                 :fields       [!default.date
+                                *sum/Integer
+                                *sum_2/Integer]
+                 :filter       [:> *sum/Float [:value 300 {:base_type :type/Float}]]
+                 :limit        2
+                 :qp/refs      {$date                                 {:alias "DATE", :position 0, :source {:alias "DATE", :table ::refs/source}}
+                                [:field "sum" {:base-type :type/*}]   {:alias "sum", :position 1, :source {:alias "sum", :table ::refs/source}}
+                                *sum/Integer                          {:alias "sum", :source {:alias "sum", :table ::refs/source}}
+                                [:field "sum_2" {:base-type :type/*}] {:alias "sum_2", :position 2, :source {:alias "sum_2", :table ::refs/source}}
+                                *sum_2/Integer                        {:alias "sum_2", :source {:alias "sum_2", :table ::refs/source}}}})
+              (-> (mt/mbql-query checkins
+                    {:source-query {:source-table $$checkins
+                                    :aggregation  [[:sum $user_id]
+                                                   [:sum $venue_id]]
+                                    :breakout     [!month.date]}
+                     :filter       [:> *sum/Float 300]
+                     :limit        2})
+                  qp/query->preprocessed
+                  add-references))))
+
 (deftest mega-query-refs-test
   (testing "Should generate correct SQL for joins against source queries that contain joins (#12928)"
     (mt/dataset sample-dataset
