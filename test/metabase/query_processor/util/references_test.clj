@@ -152,9 +152,9 @@
                                                $longitude           {:alias "LONGITUDE"}
                                                &Cat.categories.name {:position 2, :alias "Cat__NAME", :source {:table "Cat", :alias "NAME"}}
                                                &Cat.categories.id   {:alias "Cat__ID", :source {:table "Cat", :alias "ID"}}}}
-                 :qp/refs      {$id             {:alias "ID", :source {:table ::refs/source, :alias "ID"}}
-                                $name           {:alias "NAME", :source {:table ::refs/source, :alias "NAME"}}
-                                *Cat__NAME/Text {:alias "Cat__NAME", :source {:table ::refs/source, :alias "Cat__NAME"}}}})
+                 :qp/refs      {$id                  {:alias "ID", :source {:table ::refs/source, :alias "ID"}}
+                                $name                {:alias "NAME", :source {:table ::refs/source, :alias "NAME"}}
+                                &Cat.categories.name {:alias "Cat__NAME", :source {:table ::refs/source, :alias "Cat__NAME"}}}})
               (add-references
                (mt/mbql-query venues
                  {:source-query {:source-table $$venues
@@ -216,10 +216,8 @@
                                                                  &P2.products.title      {:alias "P2__TITLE", :source {:alias "TITLE", :table "P2"}}
                                                                  &P2.products.vendor     {:alias "P2__VENDOR", :source {:alias "VENDOR", :table "P2"}}}}}]
                    :limit        1
-                   :qp/refs      {&P1.products.category  {:alias "CATEGORY", :position 0}
-                                  &Q2.*P2__CATEGORY/Text {:alias "Q2__P2__CATEGORY", :source {:alias "P2__CATEGORY", :table "Q2"}}
-                                  *P1__CATEGORY/Text     {:alias  "P1__CATEGORY"
-                                                          :source {:alias "P1__CATEGORY", :table ::refs/source}}}})
+                   :qp/refs      {&Q2.products.category {:alias "Q2__P2__CATEGORY", :source {:table "Q2", :alias "P2__CATEGORY"}}
+                                  &P1.products.category {:alias "P1__CATEGORY", :position 0, :source {:table ::refs/source, :alias "P1__CATEGORY"}}}})
                 (add-references
                  ;; This query is fundamentally BROKEN, we shouldn't be using `&P1.products.category` outside of the
                  ;; source query that has its join.
@@ -368,6 +366,10 @@
                                                               [:aggregation 0] {:alias "MaxPrice", :position 1}
                                                               [:aggregation 1] {:alias "AvgPrice", :position 2}
                                                               [:aggregation 2] {:alias "MinPrice", :position 3}}}
+                                :fields       [&CategoriesStats.category_id
+                                               &CategoriesStats.*MaxPrice/Integer
+                                               &CategoriesStats.*AvgPrice/Integer
+                                               &CategoriesStats.*MinPrice/Integer]
                                 :alias        "CategoriesStats"}]
                  :limit       3
                  :qp/refs     {$id                                 {:alias "ID", :position 0}
@@ -406,6 +408,42 @@
                                   :alias        "CategoriesStats"
                                   :fields       :all}]
                    :limit       3}))))))
+
+(deftest implicit-join-test
+  (is (query= (mt/mbql-query venues
+                {:joins    [{:source-table $$categories
+                             :alias        "CATEGORIES__via__CATEGORY_ID"
+                             :condition    [:= $category_id &CATEGORIES__via__CATEGORY_ID.categories.id]
+                             :strategy     :left-join}]
+                 :fields   [$name
+                            $category_id->&CATEGORIES__via__CATEGORY_ID.categories.name]
+                 :order-by [[:asc $id]]
+                 :limit    5
+                 :qp/refs  {$name                                         {:alias    "NAME"
+                                                                           :position 0}
+                            &CATEGORIES__via__CATEGORY_ID.categories.name {:alias    "CATEGORIES__via__CATEGORY_ID__NAME"
+                                                                           :position 1
+                                                                           :source   {:table "CATEGORIES__via__CATEGORY_ID"
+                                                                                      :alias "NAME"}}
+                            $category_id                                  {:alias "CATEGORY_ID"}
+                            $id                                           {:alias "ID"}
+                            $latitude                                     {:alias "LATITUDE"}
+                            $longitude                                    {:alias "LONGITUDE"}
+                            $price                                        {:alias "PRICE"}
+                            &CATEGORIES__via__CATEGORY_ID.categories.id   {:alias  "CATEGORIES__via__CATEGORY_ID__ID"
+                                                                           :source {:alias "ID"
+                                                                                    :table "CATEGORIES__via__CATEGORY_ID"}}}})
+              (add-references
+               (qp/query->preprocessed
+                (mt/mbql-query venues
+                  {:joins    [{:source-table $$categories
+                               :alias        "CATEGORIES__via__CATEGORY_ID"
+                               :condition    [:= $category_id &CATEGORIES__via__CATEGORY_ID.categories.id]
+                               :strategy     :left-join}]
+                   :fields   [$name
+                              $category_id->&CATEGORIES__via__CATEGORY_ID.categories.name]
+                   :order-by [[:asc $id]]
+                   :limit    5}))))))
 
 (deftest mega-query-refs-test
   (testing "Should generate correct SQL for joins against source queries that contain joins (#12928)"

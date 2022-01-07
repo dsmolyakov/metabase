@@ -48,7 +48,8 @@
   (cond-> clause
     (mbql.u/is-clause? :field clause)
     (mbql.u/update-field-options (comp remove-namespaced-options
-                                       remove-default-temporal-unit))))
+                                       remove-default-temporal-unit
+                                       #(dissoc % :source-field)))))
 
 (defn- find-qp-refs-info [{:qp/keys [refs], :keys [source-query joins]}]
   (cons
@@ -149,7 +150,13 @@
                                  :source {:table ::source, :alias field-name})]
 
                   _
-                  [clause info]))))
+                  [clause info])))
+         (map (fn [[clause info]]
+                [clause (mbql.u/match-one clause
+                          [:field _ (opts :guard :join-alias)]
+                          (assoc info :source {:table (:join-alias opts), :alias (:alias info)})
+
+                          _ info)])))
    refs))
 
 (defn- expression-references [{:keys [expressions]}]
@@ -228,17 +235,7 @@
    (raise-source-query-field-or-ref source-query clause (field-ref-info source-query clause)))
 
   ([source-query clause ref-info]
-   (assert ref-info)                    ; TODO -- convert to `tru` or something
    (mbql.u/match-one clause
-     ;; [:field (id :guard integer?) (_opts :guard :join-alias)]
-     ;; (let [{field-alias :alias}   ref-info
-     ;;       {base-type :base_type} (qp.store/field id)]
-     ;;   [:field field-alias {:base-type base-type}])
-
-     ;; [:field (field-name :guard string?) (opts :guard :join-alias)]
-     ;; (let [{field-alias :alias} ref-info]
-     ;;   [:field field-alias (select-keys opts [:base-type])])
-
      :field
      clause
 

@@ -583,6 +583,26 @@
                    mbql->native
                    sql.qp-test-util/sql->sql-map)))))))
 
+(deftest implicit-join-test
+  (is (= '{:select    [VENUES.NAME AS NAME
+                       CATEGORIES__via__CATEGORY_ID.NAME AS CATEGORIES__via__CATEGORY_ID__NAME]
+           :from      [VENUES]
+           :left-join [CATEGORIES CATEGORIES__via__CATEGORY_ID
+                       ON VENUES.CATEGORY_ID = CATEGORIES__via__CATEGORY_ID.ID]
+           :order-by  [VENUES.ID ASC]
+           :limit     [5]}
+         (-> (mt/mbql-query venues
+               {:joins    [{:source-table $$categories
+                            :alias        "CATEGORIES__via__CATEGORY_ID"
+                            :condition    [:= $category_id &CATEGORIES__via__CATEGORY_ID.categories.id]
+                            :strategy     :left-join}]
+                :fields   [$name
+                           $category_id->&CATEGORIES__via__CATEGORY_ID.categories.name],
+                :order-by [[:asc $id]]
+                :limit    5})
+             mbql->native
+             sql.qp-test-util/sql->sql-map))))
+
 (deftest mega-query-test
   (testing "Should generate correct SQL for joins against source queries that contain joins (#12928)"
     (mt/dataset sample-dataset
