@@ -983,6 +983,7 @@ jobs:
       QA_DB_ENABLED: << parameters.qa-db >>
       DISPLAY: ""
       MB_SNOWPLOW_AVAILABLE: << parameters.snowplow >>
+    parallelism: 4
     steps:
       - attach-workspace
       - run-on-change:
