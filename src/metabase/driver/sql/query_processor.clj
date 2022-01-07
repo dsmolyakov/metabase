@@ -28,6 +28,13 @@
   (:import metabase.models.field.FieldInstance
            [metabase.util.honeysql_extensions Identifier TypedHoneySQLForm]))
 
+(def source-query-alias
+  "Alias to use for source queries, e.g.:
+
+    SELECT source.*
+    FROM ( SELECT * FROM some_table ) source"
+  "source")
+
 ;; TODO - yet another `*query*` dynamic var. We should really consolidate them all so we only need a single one.
 (def ^:dynamic *query*
   "The INNER query currently being processed, for situations where we need to refer back to it."
@@ -922,15 +929,6 @@
 ;;; -------------------------------------------- Handling source queries ---------------------------------------------
 
 (declare apply-clauses)
-
-;; TODO - it seems to me like we could actually properly handle nested nested queries by giving each level of nesting
-;; a different alias
-(def source-query-alias
-  "Alias to use for source queries, e.g.:
-
-    SELECT source.*
-    FROM ( SELECT * FROM some_table ) source"
-  "source")
 
 (defn- apply-source-query
   "Handle a `:source-query` clause by adding a recursive `SELECT` or native query. At the time of this writing, all

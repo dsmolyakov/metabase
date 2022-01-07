@@ -10,7 +10,6 @@
   "
   (:require [clojure.data :as data]
             [clojure.test :as t]
-            dev.debug-qp
             [metabase.util.date-2 :as date-2]
             [metabase.util.i18n.impl :as i18n.impl]
             [schema.core :as s]))
@@ -50,16 +49,18 @@
 ;; telling you the name of the referenced Fields/Tables
 (defmethod t/assert-expr 'query=
   [message [_ expected actual :as args]]
-  `(let [expected# ~expected
-         actual#   ~actual
-         pass?#    (= expected# actual#)
-         expected# (dev.debug-qp/add-names expected#)
-         actual#   (dev.debug-qp/add-names actual#)]
-     (t/do-report
-      {:type     (if pass?# :pass :fail)
-       :message  ~message
-       :expected expected#
-       :actual   actual#
-       :diffs    (when-not pass?#
-                   (let [[only-in-actual# only-in-expected#] (data/diff actual# expected#)]
-                     [[actual# [only-in-expected# only-in-actual#]]]))})))
+  `(do
+     (require 'dev.debug-qp)
+     (let [expected# ~expected
+           actual#   ~actual
+           pass?#    (= expected# actual#)
+           expected# ((resolve 'dev.debug-qp/add-names) expected#)
+           actual#   ((resolve 'dev.debug-qp/add-names) actual#)]
+       (t/do-report
+        {:type     (if pass?# :pass :fail)
+         :message  ~message
+         :expected expected#
+         :actual   actual#
+         :diffs    (when-not pass?#
+                     (let [[only-in-actual# only-in-expected#] (data/diff actual# expected#)]
+                       [[actual# [only-in-expected# only-in-actual#]]]))}))))

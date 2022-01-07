@@ -6,20 +6,21 @@
    (This namespace is here rather than in the shared MBQL lib because it relies on other QP-land utils like the QP
   refs stuff.)"
   (:require [metabase.mbql.util :as mbql.u]
-            [metabase.query-processor :as qp]
             [metabase.query-processor.store :as qp.store]
             [metabase.query-processor.util.references :as refs]
-            [metabase.util :as u]))
+            [metabase.util :as u]
+            [metabase.plugins.classloader :as classloader]))
 
 (defn- ensure-refs [{:qp/keys [refs], :as query}]
   (cond-> query
     (not refs) refs/add-references))
 
 (defn- nest-source [inner-query]
+  (classloader/require 'metabase.query-processor)
   (let [source (as-> (select-keys inner-query [:source-table :source-query :source-metadata :joins :expressions]) source
-                 (qp/query->preprocessed {:database (u/the-id (qp.store/database))
-                                          :type     :query
-                                          :query    source})
+                 ((resolve 'metabase.query-processor/query->preprocessed) {:database (u/the-id (qp.store/database))
+                                                                           :type     :query
+                                                                           :query    source})
                  (:query source)
                  (dissoc source :limit))]
     (-> inner-query

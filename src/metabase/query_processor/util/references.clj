@@ -69,14 +69,12 @@
                            [:field (id :guard integer?) opts]
                            (let [field (qp.store/field id)]
                              [:field (:name field) (assoc opts :base-type (:base_type field))]))]
-        (println "(pr-str literal):" (pr-str literal)) ; NOCOMMIT
         (when-let [literal-match (field-ref-info-dwim query literal)]
           (log/warn (trs "Using match for :field literal clause {0}" (u/colorize 'yellow literal-match)))
           literal-match))
 
       ;; look for ref info in the source query and in joins and use that if it matches
       (some (fn [refs]
-              (println "refs:\n" (u/pprint-to-str refs)) ; NOCOMMIT
               (when-let [ref-info (get refs clause)]
                 (let [fixed {:alias (:alias ref-info), :source {:table ::source, :alias (:alias ref-info)}}]
                   (log/warn (trs "Using ref info from a source query: {0}" (u/colorize 'yellow (pr-str fixed))))
@@ -100,24 +98,19 @@
 (defn field-ref-info
   "Get the matching `:qp/refs` info for a `:field`/`:expression`/`:aggregation` clause in `query`."
   [query clause]
-  (when (= clause [:field 6634 #_"ORDERS.CREATED_AT" {:temporal-unit :year}])
-    (println "(u/pprint-to-str 'yellow qury):" (u/pprint-to-str 'yellow query))) ; NOCOMMIT
   ;; this error should (hopefully) only ever be dev-facing, so it's not i18n'ed
   (when (:strategy query)
     (throw (ex-info "Bad field ref info lookup: got join when expecting a query"
                     {:query query, :clause clause})))
   (let [clause (normalize-clause clause)]
-    (u/prog1 (or (get-in query [:qp/refs clause])
-                 (do
-                   (log/warn (trs "No exact field ref info match for {0}" (u/colorize 'red (pr-str clause))))
-                   (field-ref-info-dwim query clause)
-                   (log/warn (str/join \newline
-                                       [(tru "Cannot find a match for {0}" (u/colorize 'red (pr-str clause)))
-                                        (tru "in query:")
-                                        (u/pprint-to-str 'yellow query)]))))
-      (when (= clause [:field 6634 #_"ORDERS.CREATED_AT" {:temporal-unit :year}])
-        (println "<>:" <>)) ; NOCOMMIT
-      )))
+    (or (get-in query [:qp/refs clause])
+        (do
+          (log/warn (trs "No exact field ref info match for {0}" (u/colorize 'red (pr-str clause))))
+          (field-ref-info-dwim query clause)
+          (log/warn (str/join \newline
+                              [(tru "Cannot find a match for {0}" (u/colorize 'red (pr-str clause)))
+                               (tru "in query:")
+                               (u/pprint-to-str 'yellow query)]))))))
 
 (defn- source-table-references [source-table-id join-alias]
   (when source-table-id
@@ -235,7 +228,7 @@
    (raise-source-query-field-or-ref source-query clause (field-ref-info source-query clause)))
 
   ([source-query clause ref-info]
-   (assert ref-info)                    ; NOCOMMIT -- convert to `tru` or something
+   (assert ref-info)                    ; TODO -- convert to `tru` or something
    (mbql.u/match-one clause
      ;; [:field (id :guard integer?) (_opts :guard :join-alias)]
      ;; (let [{field-alias :alias}   ref-info
