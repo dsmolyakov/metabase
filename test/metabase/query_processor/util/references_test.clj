@@ -165,6 +165,83 @@
                                                  :fields       [&Cat.categories.name]}]
                                  :fields       [$id $name &Cat.categories.name]}})))))
 
+(deftest join-against-source-query-test
+  (mt/dataset sample-dataset
+    (is (query= (mt/mbql-query orders
+                  {:fields       [&P1.products.category]
+                   :source-query {:source-table $$orders
+                                  :fields       [&P1.products.category]
+                                  :joins        [{:strategy     :left-join
+                                                  :source-table $$products
+                                                  :condition    [:= $product_id &P1.products.id]
+                                                  :alias        "P1"}]
+                                  :qp/refs      {$created_at             {:alias "CREATED_AT"}
+                                                 $discount               {:alias "DISCOUNT"}
+                                                 $id                     {:alias "ID"}
+                                                 $product_id             {:alias "PRODUCT_ID"}
+                                                 $quantity               {:alias "QUANTITY"}
+                                                 $subtotal               {:alias "SUBTOTAL"}
+                                                 $tax                    {:alias "TAX"}
+                                                 $total                  {:alias "TOTAL"}
+                                                 $user_id                {:alias "USER_ID"}
+                                                 &P1.products.category   {:alias "P1__CATEGORY", :position 0, :source {:alias "CATEGORY", :table "P1"}}
+                                                 &P1.products.created_at {:alias "P1__CREATED_AT", :source {:alias "CREATED_AT", :table "P1"}}
+                                                 &P1.products.ean        {:alias "P1__EAN", :source {:alias "EAN", :table "P1"}}
+                                                 &P1.products.id         {:alias "P1__ID", :source {:alias "ID", :table "P1"}}
+                                                 &P1.products.price      {:alias "P1__PRICE", :source {:alias "PRICE", :table "P1"}}
+                                                 &P1.products.rating     {:alias "P1__RATING", :source {:alias "RATING", :table "P1"}}
+                                                 &P1.products.title      {:alias "P1__TITLE", :source {:alias "TITLE", :table "P1"}}
+                                                 &P1.products.vendor     {:alias "P1__VENDOR", :source {:alias "VENDOR", :table "P1"}}}}
+                   :joins        [{:strategy     :left-join
+                                   :condition    [:= &P1.products.category &Q2.products.category]
+                                   :alias        "Q2"
+                                   :source-query {:source-table $$reviews
+                                                  :fields       [&P2.products.category]
+                                                  :joins        [{:strategy     :left-join
+                                                                  :source-table $$products
+                                                                  :condition    [:= $reviews.product_id &P2.products.id]
+                                                                  :alias        "P2"}]
+                                                  :qp/refs      {$reviews.body           {:alias "BODY"}
+                                                                 $reviews.created_at     {:alias "CREATED_AT"}
+                                                                 $reviews.id             {:alias "ID"}
+                                                                 $reviews.product_id     {:alias "PRODUCT_ID"}
+                                                                 $reviews.rating         {:alias "RATING"}
+                                                                 $reviews.reviewer       {:alias "REVIEWER"}
+                                                                 &P2.products.category   {:alias "P2__CATEGORY", :position 0, :source {:alias "CATEGORY", :table "P2"}}
+                                                                 &P2.products.created_at {:alias "P2__CREATED_AT", :source {:alias "CREATED_AT", :table "P2"}}
+                                                                 &P2.products.ean        {:alias "P2__EAN", :source {:alias "EAN", :table "P2"}}
+                                                                 &P2.products.id         {:alias "P2__ID", :source {:alias "ID", :table "P2"}}
+                                                                 &P2.products.price      {:alias "P2__PRICE", :source {:alias "PRICE", :table "P2"}}
+                                                                 &P2.products.rating     {:alias "P2__RATING", :source {:alias "RATING", :table "P2"}}
+                                                                 &P2.products.title      {:alias "P2__TITLE", :source {:alias "TITLE", :table "P2"}}
+                                                                 &P2.products.vendor     {:alias "P2__VENDOR", :source {:alias "VENDOR", :table "P2"}}}}}]
+                   :limit        1
+                   :qp/refs      {&P1.products.category  {:alias "CATEGORY", :position 0}
+                                  &Q2.*P2__CATEGORY/Text {:alias "Q2__P2__CATEGORY", :source {:alias "P2__CATEGORY", :table "Q2"}}
+                                  *P1__CATEGORY/Text     {:alias  "P1__CATEGORY"
+                                                          :source {:alias "P1__CATEGORY", :table ::refs/source}}}})
+                (add-references
+                 ;; This query is fundamentally BROKEN, we shouldn't be using `&P1.products.category` outside of the
+                 ;; source query that has its join.
+                 (mt/mbql-query orders
+                   {:fields       [&P1.products.category]
+                    :source-query {:source-table $$orders
+                                   :fields       [&P1.products.category]
+                                   :joins        [{:strategy     :left-join
+                                                   :source-table $$products
+                                                   :condition    [:= $product_id &P1.products.id]
+                                                   :alias        "P1"}]}
+                    :joins        [{:strategy     :left-join
+                                    :condition    [:= &P1.products.category &Q2.products.category]
+                                    :alias        "Q2"
+                                    :source-query {:source-table $$reviews
+                                                   :fields       [&P2.products.category]
+                                                   :joins        [{:strategy     :left-join
+                                                                   :source-table $$products
+                                                                   :condition    [:= $reviews.product_id &P2.products.id]
+                                                                   :alias        "P2"}]}}]
+                    :limit        1}))))))
+
 (deftest expressions-test
   (is (query= (mt/mbql-query venues
                 {:expressions {"double_id" [:* $id 2]}
@@ -297,7 +374,7 @@
                                $name                               {:alias "NAME", :position 1}
                                $category_id                        {:alias "CATEGORY_ID", :position 2}
                                $latitude                           {:alias "LATITUDE", :position 3}
-                               $longitude                          {:alias "LONGITUDE", :position 4},
+                               $longitude                          {:alias "LONGITUDE", :position 4}
                                $price                              {:alias "PRICE", :position 5}
                                [:expression "RelativePrice"]       {:alias "RelativePrice", :position 6}
                                &CategoriesStats.venues.category_id {:alias "CategoriesStats__CATEGORY_ID", :position 7, :source {:alias "CATEGORY_ID", :table "CategoriesStats"}}

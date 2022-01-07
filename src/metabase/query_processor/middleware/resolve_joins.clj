@@ -120,7 +120,13 @@
   parent level, because we should only be returning the ones from the ags and breakouts in the final results."
   [{:keys [joins], :as inner-query} :- UnresolvedMBQLQuery]
   (let [join-fields (when (should-add-join-fields? inner-query)
-                      (joins->fields joins))]
+                      (joins->fields joins))
+        ;; remove remaining keyword `:fields` like `:none` from joins
+        inner-query (update inner-query :joins (fn [joins]
+                                                 (mapv (fn [{:keys [fields], :as join}]
+                                                         (cond-> join
+                                                           (keyword? fields) (dissoc :fields)))
+                                                       joins)))]
     (cond-> inner-query
       (seq join-fields) (update :fields (comp vec distinct concat) join-fields))))
 

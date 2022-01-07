@@ -293,21 +293,21 @@
                  sql.qp-test-util/sql->sql-map))))))
 
 (deftest simple-expressions-test
-  (is (= '{:select [source.id AS id
-                    source.name AS name
-                    source.category_id AS category_id
-                    source.latitude AS latitude
-                    source.longitude AS longitude
-                    source.price AS price
+  (is (= '{:select [source.ID AS ID
+                    source.NAME AS NAME
+                    source.CATEGORY_ID AS CATEGORY_ID
+                    source.LATITUDE AS LATITUDE
+                    source.LONGITUDE AS LONGITUDE
+                    source.PRICE AS PRICE
                     source.double_id AS double_id]
-           :from   [{:select [public.venues.id AS id
-                              public.venues.name AS name
-                              public.venues.category_id AS category_id
-                              public.venues.latitude AS latitude
-                              public.venues.longitude AS longitude
-                              public.venues.price AS price
-                              (public.venues.id * 2) AS double_id]
-                     :from   [public.venues]}
+           :from   [{:select [VENUES.ID AS ID
+                              VENUES.NAME AS NAME
+                              VENUES.CATEGORY_ID AS CATEGORY_ID
+                              VENUES.LATITUDE AS LATITUDE
+                              VENUES.LONGITUDE AS LONGITUDE
+                              VENUES.PRICE AS PRICE
+                              (VENUES.ID * 2) AS double_id]
+                     :from   [VENUES]}
                     source]
            :limit  [1]}
          (-> (mt/mbql-query venues
@@ -322,72 +322,104 @@
 (deftest multiple-joins-with-expressions-test
   (testing "We should be able to compile a complicated query with multiple joins and expressions correctly"
     (mt/dataset sample-dataset
-      (is (= (str "SELECT source.PRODUCTS__via__PRODUCT_ID__CATEGORY AS PRODUCTS__via__PRODUCT_ID__CATEGORY,"
-                  " source.PEOPLE__via__USER_ID__SOURCE AS PEOPLE__via__USER_ID__SOURCE,"
-                  " parsedatetime(year(source.CREATED_AT), 'yyyy') AS CREATED_AT,"
-                  " source.\"pivot-grouping\" AS \"pivot-grouping\", count(*) AS count "
-                  "FROM ("
-                  "SELECT PRODUCTS__via__PRODUCT_ID.CATEGORY AS PRODUCTS__via__PRODUCT_ID__CATEGORY,"
-                  " PEOPLE__via__USER_ID.SOURCE AS PEOPLE__via__USER_ID__SOURCE,"
-                  " ORDERS.CREATED_AT AS CREATED_AT,"
-                  " abs(0) AS \"pivot-grouping\" "
-                  "FROM ORDERS"
-                  " LEFT JOIN PRODUCTS PRODUCTS__via__PRODUCT_ID"
-                  " ON ORDERS.PRODUCT_ID = PRODUCTS__via__PRODUCT_ID.ID "
-                  "LEFT JOIN PEOPLE PEOPLE__via__USER_ID"
-                  " ON ORDERS.USER_ID = PEOPLE__via__USER_ID.ID"
-                  ") source "
-                  "WHERE ((source.PEOPLE__via__USER_ID__SOURCE = ? OR source.PEOPLE__via__USER_ID__SOURCE = ?)"
-                  " AND (source.PRODUCTS__via__PRODUCT_ID__CATEGORY = ?"
-                  " OR source.PRODUCTS__via__PRODUCT_ID__CATEGORY = ?)"
-                  " AND source.CREATED_AT >= parsedatetime(year(dateadd('year', CAST(-2 AS long), now())), 'yyyy')"
-                  " AND source.CREATED_AT < parsedatetime(year(now()), 'yyyy')) "
-                  "GROUP BY source.PRODUCTS__via__PRODUCT_ID__CATEGORY,"
-                  " source.PEOPLE__via__USER_ID__SOURCE,"
-                  " parsedatetime(year(source.CREATED_AT), 'yyyy'),"
-                  " source.\"pivot-grouping\" "
-                  "ORDER BY source.PRODUCTS__via__PRODUCT_ID__CATEGORY ASC,"
-                  " source.PEOPLE__via__USER_ID__SOURCE ASC,"
-                  " parsedatetime(year(source.CREATED_AT), 'yyyy') ASC,"
-                  " source.\"pivot-grouping\" ASC")
-             (mbql->native
-              (mt/mbql-query orders
-                {:aggregation [[:aggregation-options [:count] {:name "count"}]]
-                 :breakout    [&PRODUCTS__via__PRODUCT_ID.products.category
-                               &PEOPLE__via__USER_ID.people.source
-                               !year.created_at
-                               [:expression "pivot-grouping"]]
-                 :filter     [:and
-                              [:or
-                               [:=
-                                &PEOPLE__via__USER_ID.people.source
-                                [:value "Facebook" {:base_type :type/Text, :semantic_type nil, :database_type "VARCHAR", :name "SOURCE"}]]
-                               [:=
-                                &PEOPLE__via__USER_ID.people.source
-                                [:value "Google" {:base_type :type/Text, :semantic_type nil, :database_type "VARCHAR", :name "SOURCE"}]]]
-                              [:or
-                               [:=
-                                &PRODUCTS__via__PRODUCT_ID.products.category
-                                [:value "Doohickey" {:base_type :type/Text, :semantic_type nil, :database_type "VARCHAR", :name "CATEGORY"}]]
-                               [:=
-                                &PRODUCTS__via__PRODUCT_ID.products.category
-                                [:value "Gizmo" {:base_type :type/Text, :semantic_type nil, :database_type "VARCHAR", :name "CATEGORY"}]]]
-                              [:between !year.created_at [:relative-datetime -2 :year] [:relative-datetime -1 :year]]]
-                 :expressions {:pivot-grouping [:abs 0]}
-                 :order-by    [[:asc &PRODUCTS__via__PRODUCT_ID.products.category]
-                               [:asc &PEOPLE__via__USER_ID.people.source]
-                               [:asc !year.created_at]
-                               [:asc [:expression "pivot-grouping"]]]
-                 :joins       [{:source-table $$products
-                                :strategy     :left-join
-                                :alias        "PRODUCTS__via__PRODUCT_ID"
-                                :fk-field-id  %product_id
-                                :condition    [:= $product_id &PRODUCTS__via__PRODUCT_ID.products.id]}
-                               {:source-table $$people
-                                :strategy     :left-join
-                                :alias        "PEOPLE__via__USER_ID"
-                                :fk-field-id  %user_id
-                                :condition    [:= $user_id &PEOPLE__via__USER_ID.people.id]}]})))))))
+      ;; SELECT source.PRODUCTS__via__PRODUCT_ID__CATEGORY AS PRODUCTS__via__PRODUCT_ID__CATEGORY,
+      ;;  source.PEOPLE__via__USER_ID__SOURCE AS PEOPLE__via__USER_ID__SOURCE,
+      ;;  parsedatetime(year(source.CREATED_AT), 'yyyy') AS CREATED_AT,
+      ;;  source."pivot-grouping" AS "pivot-grouping", count(*) AS count
+      ;; FROM (
+      ;; SELECT PRODUCTS__via__PRODUCT_ID.CATEGORY AS PRODUCTS__via__PRODUCT_ID__CATEGORY,
+      ;;  PEOPLE__via__USER_ID.SOURCE AS PEOPLE__via__USER_ID__SOURCE,
+      ;;  ORDERS.CREATED_AT AS CREATED_AT,
+      ;;  abs(0) AS "pivot-grouping"
+      ;; FROM ORDERS
+      ;;  LEFT JOIN PRODUCTS PRODUCTS__via__PRODUCT_ID
+      ;;  ON ORDERS.PRODUCT_ID = PRODUCTS__via__PRODUCT_ID.ID
+      ;; LEFT JOIN PEOPLE PEOPLE__via__USER_ID
+      ;;  ON ORDERS.USER_ID = PEOPLE__via__USER_ID.ID
+      ;; ) source
+      ;; WHERE ((source.PEOPLE__via__USER_ID__SOURCE = ? OR source.PEOPLE__via__USER_ID__SOURCE = ?)
+      ;;  AND (source.PRODUCTS__via__PRODUCT_ID__CATEGORY = ?
+      ;;  OR source.PRODUCTS__via__PRODUCT_ID__CATEGORY = ?)
+      ;;  AND source.CREATED_AT >= parsedatetime(year(dateadd('year', CAST(-2 AS long), now())), 'yyyy')
+      ;;  AND source.CREATED_AT < parsedatetime(year(now()), 'yyyy'))
+      ;; GROUP BY source.PRODUCTS__via__PRODUCT_ID__CATEGORY,
+      ;;  source.PEOPLE__via__USER_ID__SOURCE,
+      ;;  parsedatetime(year(source.CREATED_AT), 'yyyy'),
+      ;;  source."pivot-grouping"
+      ;; ORDER BY source.PRODUCTS__via__PRODUCT_ID__CATEGORY ASC,
+      ;;  source.PEOPLE__via__USER_ID__SOURCE ASC,
+      ;;  parsedatetime(year(source.CREATED_AT), 'yyyy') ASC,
+      ;;  source."pivot-grouping" ASC
+      (is (= '{:select   [source.PRODUCTS__via__PRODUCT_ID__CATEGORY AS PRODUCTS__via__PRODUCT_ID__CATEGORY
+                          source.PEOPLE__via__USER_ID__SOURCE AS PEOPLE__via__USER_ID__SOURCE
+                          parsedatetime (year (source.CREATED_AT) "yyyy") AS CREATED_AT
+                          source.pivot-grouping AS pivot-grouping
+                          count (*) AS count]
+               :from     [{:select
+                           [PRODUCTS__via__PRODUCT_ID.CATEGORY AS PRODUCTS__via__PRODUCT_ID__CATEGORY
+                            PEOPLE__via__USER_ID.SOURCE AS PEOPLE__via__USER_ID__SOURCE
+                            ORDERS.CREATED_AT AS CREATED_AT
+                            abs (0) AS pivot-grouping]
+                           :from      [ORDERS]
+                           :left-join [PRODUCTS PRODUCTS__via__PRODUCT_ID
+                                       ON ORDERS.PRODUCT_ID = PRODUCTS__via__PRODUCT_ID.ID
+                                       PEOPLE PEOPLE__via__USER_ID
+                                       ON ORDERS.USER_ID = PEOPLE__via__USER_ID.ID]}
+                          source]
+               :where    [((source.PEOPLE__via__USER_ID__SOURCE = ? OR source.PEOPLE__via__USER_ID__SOURCE = ?)
+                           AND
+                           (source.PRODUCTS__via__PRODUCT_ID__CATEGORY = ? OR source.PRODUCTS__via__PRODUCT_ID__CATEGORY = ?)
+                           AND
+                           source.CREATED_AT >= parsedatetime (year (dateadd ("year" CAST (-2 AS long) now ())) "yyyy")
+                           AND
+                           source.CREATED_AT < parsedatetime (year (now ()) "yyyy"))]
+               :group-by [source.PRODUCTS__via__PRODUCT_ID__CATEGORY
+                          source.PEOPLE__via__USER_ID__SOURCE
+                          parsedatetime (year (source.CREATED_AT) "yyyy")
+                          source.pivot-grouping]
+               :order-by [source.PRODUCTS__via__PRODUCT_ID__CATEGORY ASC
+                          source.PEOPLE__via__USER_ID__SOURCE ASC
+                          parsedatetime (year (source.CREATED_AT) "yyyy") ASC
+                          source.pivot-grouping ASC]}
+             (-> (mt/mbql-query orders
+                   {:aggregation [[:aggregation-options [:count] {:name "count"}]]
+                    :breakout    [&PRODUCTS__via__PRODUCT_ID.products.category
+                                  &PEOPLE__via__USER_ID.people.source
+                                  !year.created_at
+                                  [:expression "pivot-grouping"]]
+                    :filter      [:and
+                                  [:or
+                                   [:=
+                                    &PEOPLE__via__USER_ID.people.source
+                                    [:value "Facebook" {:base_type :type/Text, :semantic_type nil, :database_type "VARCHAR", :name "SOURCE"}]]
+                                   [:=
+                                    &PEOPLE__via__USER_ID.people.source
+                                    [:value "Google" {:base_type :type/Text, :semantic_type nil, :database_type "VARCHAR", :name "SOURCE"}]]]
+                                  [:or
+                                   [:=
+                                    &PRODUCTS__via__PRODUCT_ID.products.category
+                                    [:value "Doohickey" {:base_type :type/Text, :semantic_type nil, :database_type "VARCHAR", :name "CATEGORY"}]]
+                                   [:=
+                                    &PRODUCTS__via__PRODUCT_ID.products.category
+                                    [:value "Gizmo" {:base_type :type/Text, :semantic_type nil, :database_type "VARCHAR", :name "CATEGORY"}]]]
+                                  [:between !year.created_at [:relative-datetime -2 :year] [:relative-datetime -1 :year]]]
+                    :expressions {:pivot-grouping [:abs 0]}
+                    :order-by    [[:asc &PRODUCTS__via__PRODUCT_ID.products.category]
+                                  [:asc &PEOPLE__via__USER_ID.people.source]
+                                  [:asc !year.created_at]
+                                  [:asc [:expression "pivot-grouping"]]]
+                    :joins       [{:source-table $$products
+                                   :strategy     :left-join
+                                   :alias        "PRODUCTS__via__PRODUCT_ID"
+                                   :fk-field-id  %product_id
+                                   :condition    [:= $product_id &PRODUCTS__via__PRODUCT_ID.products.id]}
+                                  {:source-table $$people
+                                   :strategy     :left-join
+                                   :alias        "PEOPLE__via__USER_ID"
+                                   :fk-field-id  %user_id
+                                   :condition    [:= $user_id &PEOPLE__via__USER_ID.people.id]}]})
+                 mbql->native
+                 sql.qp-test-util/sql->sql-map))))))
 
 (deftest reference-aggregation-expressions-in-joins-test
   (testing "See if we can correctly compile a query that references expressions that come from a join"
@@ -399,9 +431,9 @@
                       source.PRICE AS PRICE
                       source.RelativePrice AS RelativePrice
                       source.CategoriesStats__CATEGORY_ID AS CategoriesStats__CATEGORY_ID
-                      source.MaxPrice AS CategoriesStats__MaxPrice
-                      source.AvgPrice AS CategoriesStats__AvgPrice
-                      source.MinPrice AS CategoriesStats__MinPrice]
+                      source.CategoriesStats__MaxPrice AS CategoriesStats__MaxPrice
+                      source.CategoriesStats__AvgPrice AS CategoriesStats__AvgPrice
+                      source.CategoriesStats__MinPrice AS CategoriesStats__MinPrice]
              :from   [{:select    [VENUES.ID AS ID
                                    VENUES.NAME AS NAME
                                    VENUES.CATEGORY_ID AS CATEGORY_ID

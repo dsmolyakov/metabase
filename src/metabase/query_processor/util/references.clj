@@ -50,28 +50,74 @@
     (mbql.u/update-field-options (comp remove-namespaced-options
                                        remove-default-temporal-unit))))
 
+(defn- find-qp-refs-info [{:qp/keys [refs], :keys [source-query joins]}]
+  (cons
+   refs
+   (lazy-cat
+    (when source-query
+      (find-qp-refs-info source-query))
+    (when (seq joins)
+      (mapcat find-qp-refs-info joins)))))
+
+(declare raise-source-query-field-or-ref)
+
+(defn- field-ref-info-dwim [query clause]
+  (or (get-in query [:qp/refs clause])
+
+      ;; see if there's a match for the field w/ name clause
+      (when-let [literal (mbql.u/match-one clause
+                           [:field (id :guard integer?) opts]
+                           (let [field (qp.store/field id)]
+                             [:field (:name field) (assoc opts :base-type (:base_type field))]))]
+        (println "(pr-str literal):" (pr-str literal)) ; NOCOMMIT
+        (when-let [literal-match (field-ref-info-dwim query literal)]
+          (log/warn (trs "Using match for :field literal clause {0}" (u/colorize 'yellow literal-match)))
+          literal-match))
+
+      ;; look for ref info in the source query and in joins and use that if it matches
+      (some (fn [refs]
+              (println "refs:\n" (u/pprint-to-str refs)) ; NOCOMMIT
+              (when-let [ref-info (get refs clause)]
+                (let [fixed {:alias (:alias ref-info), :source {:table ::source, :alias (:alias ref-info)}}]
+                  (log/warn (trs "Using ref info from a source query: {0}" (u/colorize 'yellow (pr-str fixed))))
+                  fixed)))
+            (find-qp-refs-info query))
+
+      ;; TODO -- should we also try without binning options?
+      ;;
+      ;; HACK HACK HACK HACK just use the closest match if we can't find anything else.
+      (when-let [[closest-match info] (mbql.u/match-one clause
+                                        [:field id-or-name _]
+                                        (some (fn [[a-clause info]]
+                                                (mbql.u/match-one a-clause
+                                                  [:field an-id-or-name _]
+                                                  (when (= an-id-or-name id-or-name)
+                                                    [a-clause info])))
+                                              (:qp/refs query)))]
+        (log/warn (trs "Using close match {0} {1}" (u/colorize 'cyan (pr-str closest-match)) (u/colorize 'yellow info)))
+        info)))
+
 (defn field-ref-info
   "Get the matching `:qp/refs` info for a `:field`/`:expression`/`:aggregation` clause in `query`."
   [query clause]
+  (when (= clause [:field 6634 #_"ORDERS.CREATED_AT" {:temporal-unit :year}])
+    (println "(u/pprint-to-str 'yellow qury):" (u/pprint-to-str 'yellow query))) ; NOCOMMIT
+  ;; this error should (hopefully) only ever be dev-facing, so it's not i18n'ed
+  (when (:strategy query)
+    (throw (ex-info "Bad field ref info lookup: got join when expecting a query"
+                    {:query query, :clause clause})))
   (let [clause (normalize-clause clause)]
-    (or (get-in query [:qp/refs clause])
-        ;; TODO -- not sure whether it would make sense to also check if there's a match without binning before doing the 'closest' match thing.
-        ;;
-        ;; HACK HACK HACK HACK Ideally we shouldn't have to do any of this 'closest match' nonsense. We need to add
-        ;; middleware to reconcile/fix bad references automatically
-        (let [[closest-match info] (mbql.u/match-one clause
-                                     [:field id-or-name _]
-                                     (some (fn [[a-clause info]]
-                                             (mbql.u/match-one a-clause
-                                               [:field an-id-or-name _]
-                                               (when (= an-id-or-name id-or-name)
-                                                 [a-clause info])))
-                                           (:qp/refs query)))]
-          (log/warnf (str/join \newline [(trs "Missing Field ref info for {0}" (u/colorize 'red (pr-str clause)))
-                                         (trs "Field refs:")
-                                         (u/pprint-to-str (:qp/refs query))
-                                         (trs "Using closest match {0} {1}" (u/colorize 'cyan (pr-str closest-match)) (u/colorize 'yellow info))]))
-          info))))
+    (u/prog1 (or (get-in query [:qp/refs clause])
+                 (do
+                   (log/warn (trs "No exact field ref info match for {0}" (u/colorize 'red (pr-str clause))))
+                   (field-ref-info-dwim query clause)
+                   (log/warn (str/join \newline
+                                       [(tru "Cannot find a match for {0}" (u/colorize 'red (pr-str clause)))
+                                        (tru "in query:")
+                                        (u/pprint-to-str 'yellow query)]))))
+      (when (= clause [:field 6634 #_"ORDERS.CREATED_AT" {:temporal-unit :year}])
+        (println "<>:" <>)) ; NOCOMMIT
+      )))
 
 (defn- source-table-references [source-table-id join-alias]
   (when source-table-id
@@ -124,22 +170,24 @@
                 [(normalize-clause clause) info])))
    expressions))
 
-(defn- selected-references [{:keys [fields breakout aggregation]}]
+(defn- selected-references [{:keys [fields breakout aggregation source-table]}]
   (into
    {}
    (comp cat
          (map normalize-clause)
+         (map (fn [clause]
+                (mbql.u/match-one clause
+                  [:aggregation-options _ opts]
+                  [[:aggregation (::index opts)] {:alias (:name opts)}]
+
+                  [:expression expression-name]
+                  [[:expression expression-name] {:alias expression-name}]
+
+                  _
+                  [clause])))
          (map-indexed
-          (fn [i clause]
-            (mbql.u/match-one clause
-              [:aggregation-options _ opts]
-              [[:aggregation (::index opts)] {:position i, :alias (:name opts)}]
-
-              [:expression expression-name]
-              [[:expression expression-name] {:position i, :alias expression-name}]
-
-              _
-              [clause {:position i}]))))
+          (fn [i [clause info]]
+            [clause (assoc info :position i)])))
    [breakout
     (map-indexed
      (fn [i ag]
@@ -189,14 +237,14 @@
   ([source-query clause ref-info]
    (assert ref-info)                    ; NOCOMMIT -- convert to `tru` or something
    (mbql.u/match-one clause
-     [:field (id :guard integer?) (_opts :guard :join-alias)]
-     (let [{field-alias :alias}   ref-info
-           {base-type :base_type} (qp.store/field id)]
-       [:field field-alias {:base-type base-type}])
+     ;; [:field (id :guard integer?) (_opts :guard :join-alias)]
+     ;; (let [{field-alias :alias}   ref-info
+     ;;       {base-type :base_type} (qp.store/field id)]
+     ;;   [:field field-alias {:base-type base-type}])
 
-     [:field (field-name :guard string?) (opts :guard :join-alias)]
-     (let [{field-alias :alias} ref-info]
-       [:field field-alias (select-keys opts [:base-type])])
+     ;; [:field (field-name :guard string?) (opts :guard :join-alias)]
+     ;; (let [{field-alias :alias} ref-info]
+     ;;   [:field field-alias (select-keys opts [:base-type])])
 
      :field
      clause

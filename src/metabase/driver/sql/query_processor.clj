@@ -966,35 +966,6 @@
        inner-query)
       (apply-top-level-clauses driver honeysql-form inner-query))))
 
-;; TODO -- this should be generalized and moved somewhere else since a few of our drivers need to increase query nesting
-;; by a level for one reason or another. Maybe a QP or MBQL util namespace?
-;;
-;; TODO -- this doesn't properly handle stuff like `:aggregation` references (!)
-(defn- expressions->subselect
-  [driver query]
-  (let [subselect (-> query
-                      (select-keys [:joins :source-table :source-query :source-metadata :expressions])
-                      (assoc :fields (-> (mbql.u/match (dissoc query :source-query :joins :expressions)
-                                           ;; remove the bucketing/binning operations from the source query -- we'll
-                                           ;; do that at the parent level
-                                           [:field id-or-name opts]
-                                           [:field id-or-name (dissoc opts :temporal-unit :binning)]
-                                           :expression
-                                           &match)
-                                         distinct)))
-        ;; TODO -- this looks like it replaces any expression with this name regardless of level??
-        query' (-> (mbql.u/replace query
-                     [:expression expression-name]
-                     [:field (escape-alias driver expression-name) {:base-type (:base_type (annotate/infer-expression-type &match))}]
-                     ;; the outer select should not cast as the cast happens in the inner select
-                     [:field (field-id :guard int?) field-info]
-                     [:field field-id (assoc field-info ::outer-select true)])
-                   (dissoc :source-table :joins :expressions :source-metadata)
-                   (assoc :source-query subselect))]
-    (if (= query query')
-      query
-      (refs/add-references query'))))
-
 (defn- preprocess-query
   [driver {:keys [expressions] :as query}]
   (cond-> query

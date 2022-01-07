@@ -5,7 +5,7 @@
   (if-not (string? s)
     s
     (-> s
-        (str/replace #"\"([\w\d_]+)\"" "$1")
+        (str/replace #"\"([\w\d_-]+)\"" "$1")
         (str/replace #"PUBLIC\." ""))))
 
 (defn even-prettier-sql [s]
@@ -15,6 +15,7 @@
       (str/replace #"\(\s*" "(")
       (str/replace #"\s*\)" ")")
       (str/replace #"PUBLIC\." "")
+      (str/replace #"'" "\"")
       str/trim))
 
 (defn- symbols [s]
