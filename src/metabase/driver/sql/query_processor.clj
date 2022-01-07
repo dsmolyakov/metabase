@@ -14,13 +14,14 @@
             [metabase.models.table :refer [Table]]
             [metabase.query-processor.error-type :as qp.error-type]
             [metabase.query-processor.interface :as i]
-            [metabase.query-processor.middleware.add-references :as add-references]
             [metabase.query-processor.middleware.annotate :as annotate]
             [metabase.query-processor.middleware.wrap-value-literals :as value-literal]
             [metabase.query-processor.store :as qp.store]
+            [metabase.query-processor.util.nest-query :as nest-query]
+            [metabase.query-processor.util.references :as refs]
             [metabase.util :as u]
             [metabase.util.honeysql-extensions :as hx]
-            [metabase.util.i18n :refer [deferred-tru trs tru]]
+            [metabase.util.i18n :refer [deferred-tru tru]]
             [potemkin.types :as p.types]
             [pretty.core :refer [PrettyPrintable]]
             [schema.core :as s])
@@ -326,7 +327,7 @@
   [_ identifier]
   identifier)
 
-;; TODO -- duplicated with [[metabase.query-processor.middleware.add-references.alias/prefix-field-alias]]
+;; TODO -- duplicated with [[metabase.query-processor.middleware.refs.alias/prefix-field-alias]]
 (defmulti prefix-field-alias
   "Create a Field alias by combining a `prefix` string with `field-alias` string (itself is the result of the
   [[field->alias]] method). The default implementation just joins the two strings with `__` -- override this if you need
@@ -381,14 +382,14 @@
       (hx/+ min-value)))
 
 (defn- field-ref-info [clause]
-  (add-references/field-ref-info *query* clause))
+  (refs/field-ref-info *query* clause))
 
 (defmethod ->honeysql [:sql :field]
   [driver [_ field-id-or-name options :as field-clause]]
   (let [ref-info     (field-ref-info field-clause)
         source-alias (get-in ref-info [:source :alias])
         table-alias  (get-in ref-info [:source :table])
-        table-alias (if (= table-alias ::add-references/source)
+        table-alias (if (= table-alias ::refs/source)
                       source-query-alias
                       table-alias)
         options      (cond-> options
@@ -992,17 +993,17 @@
                    (assoc :source-query subselect))]
     (if (= query query')
       query
-      (add-references/add-references query'))))
+      (refs/add-references query'))))
 
 (defn- preprocess-query
   [driver {:keys [expressions] :as query}]
-  (cond->> query
-    expressions (expressions->subselect driver)))
+  (cond-> query
+    expressions nest-query/nest-expressions))
 
 (defn mbql->honeysql
   "Build the HoneySQL form we will compile to SQL and execute."
   [driver {inner-query :query}]
-  (let [inner-query (add-references/add-references inner-query)]
+  (let [inner-query (refs/add-references inner-query)]
     (u/prog1 (apply-clauses driver {} (preprocess-query driver inner-query))
       (when-not i/*disable-qp-logging*
         (log/tracef "\nHoneySQL Form: %s\n%s" (u/emoji "🍯") (u/pprint-to-str 'cyan <>))))))

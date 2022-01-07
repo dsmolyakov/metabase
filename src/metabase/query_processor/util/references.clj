@@ -1,17 +1,33 @@
-(ns metabase.query-processor.middleware.add-references
-  "TODO -- consider moving this into a QP util namespace?"
+(ns metabase.query-processor.util.references
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [clojure.walk :as walk]
             [metabase.mbql.schema :as mbql.s]
             [metabase.mbql.util :as mbql.u]
+            [metabase.query-processor.error-type :as qp.error-type]
             [metabase.query-processor.middleware.add-implicit-clauses :as add-implicit-clauses]
-            [metabase.query-processor.middleware.add-references :as add-references]
             [metabase.query-processor.middleware.annotate :as annotate]
             [metabase.query-processor.store :as qp.store]
             [metabase.util :as u]
-            [metabase.util.i18n :refer [trs]]
+            [metabase.util.i18n :refer [trs tru]]
+            [metabase.util.schema :as su]
             [schema.core :as s]))
+
+(def ^:private QPRefs
+  (-> {mbql.s/FieldOrAggregationReference {:alias                     su/NonBlankString
+                                           (s/optional-key :position) s/Int
+                                           (s/optional-key :source)   {:table (s/cond-pre (s/eq ::source)
+                                                                                          su/NonBlankString)
+                                                                       :alias su/NonBlankString}}}
+      (s/constrained (fn [m]
+                       (let [positions (->> m
+                                            (map (fn [[_clause {:keys [position]}]]
+                                                   position))
+                                            (filter some?))]
+                         (or (empty? positions)
+                             (and (apply distinct? positions)
+                                  (= (sort positions) (range 0 (inc (reduce max positions))))))))
+                     "all :positions must be sequential, and unique.")))
 
 (defn- remove-namespaced-options [options]
   (into {}
@@ -25,15 +41,22 @@
     (= temporal-unit :default)
     (dissoc :temporal-unit)))
 
-(defn normalize-clause [clause]
+(defn normalize-clause
+  "Normalize a `:field`/`:expression`/`:aggregation` clause by removing extra info so it can serve as a key for
+  `:qp/refs`."
+  [clause]
   (cond-> clause
     (mbql.u/is-clause? :field clause)
     (mbql.u/update-field-options (comp remove-namespaced-options
                                        remove-default-temporal-unit))))
 
-(defn field-ref-info [query clause]
+(defn field-ref-info
+  "Get the matching `:qp/refs` info for a `:field`/`:expression`/`:aggregation` clause in `query`."
+  [query clause]
   (let [clause (normalize-clause clause)]
     (or (get-in query [:qp/refs clause])
+        ;; TODO -- not sure whether it would make sense to also check if there's a match without binning before doing the 'closest' match thing.
+        ;;
         ;; HACK HACK HACK HACK Ideally we shouldn't have to do any of this 'closest match' nonsense. We need to add
         ;; middleware to reconcile/fix bad references automatically
         (let [[closest-match info] (mbql.u/match-one clause
@@ -78,14 +101,28 @@
                   [:field (id :guard integer?) _opts]
                   (let [field      (qp.store/field id)
                         field-name (:name field)]
-                    [clause (assoc info :alias field-name)])
+                    [clause (cond-> (assoc info :alias field-name)
+                              (:source info) (assoc-in [:source :alias] field-name))])
 
                   [:field (field-name :guard string?) _opts]
-                  [clause (assoc info :alias field-name)]
+                  [clause (assoc info
+                                 :alias field-name
+                                 :source {:table ::source, :alias field-name})]
 
                   _
                   [clause info]))))
    refs))
+
+(defn- expression-references [{:keys [expressions]}]
+  (into
+   {}
+   (comp (map (fn [[expression-name expression-definition]]
+                (let [expression-name (u/qualified-name expression-name)]
+                  [[:expression expression-name]
+                   {:alias expression-name}])))
+         (map (fn [[clause info]]
+                [(normalize-clause clause) info])))
+   expressions))
 
 (defn- selected-references [{:keys [fields breakout aggregation]}]
   (into
@@ -108,12 +145,74 @@
      (fn [i ag]
        (mbql.u/replace ag
          [:aggregation-options wrapped opts]
-         [:aggregation-options wrapped (assoc opts ::index i)]))
+         [:aggregation-options wrapped (assoc opts ::index i)]
+
+         ;; aggregation clause should be preprocessed into an `:aggregation-options` clause by now.
+         _
+         (throw (ex-info (tru "Expected :aggregation-options clause, got {0}" (pr-str ag))
+                         {:type qp.error-type/qp, :clause ag}))))
      aggregation)
     fields]))
 
+(defn- raise-source-query-aggregation-ref
+  "Convert an `:aggregation` reference from a source query into an appropriate `:field` clause for use in the
+  surrounding query.
+
+    (raise-source-query-aggregation-ref {:aggregation [[:count]]} 0) ; -> [:field \"count\" {:base-type :type/Integer}]"
+  [{aggregations :aggregation, :as source-query} index ref-info]
+  (let [ag-clause              (or (get aggregations index)
+                                   (throw (ex-info (tru "No aggregation at index {0}" index)
+                                                   {:type  qp.error-type/invalid-query
+                                                    :index index
+                                                    :query source-query})))
+        {base-type :base_type} (annotate/col-info-for-aggregation-clause source-query ag-clause)]
+    [:field (:alias ref-info) {:base-type (or base-type :type/*)}]))
+
+(defn- raise-source-query-expression-ref
+  "Convert an `:expression` reference from a source query into an appropriate `:field` clause for use in the surrounding
+  query."
+  [{:keys [expressions], :as source-query} expression-name]
+  (let [expression-definition (or (get expressions (keyword expression-name))
+                                  (throw (ex-info (tru "No expression named {0}" (pr-str expression-name))
+                                                  {:type            qp.error-type/invalid-query
+                                                   :expression-name expression-name
+                                                   :query           source-query})))
+        {base-type :base_type} (some-> expression-definition annotate/infer-expression-type)]
+    [:field expression-name {:base-type (or base-type :type/*)}]))
+
+(defn raise-source-query-field-or-ref
+  "Convert a `:field`/`:aggregation` reference/`:expression` reference/etc. to an `:field` clause for use in the
+  surrounding query."
+  ([source-query clause]
+   (raise-source-query-field-or-ref source-query clause (field-ref-info source-query clause)))
+
+  ([source-query clause ref-info]
+   (assert ref-info)                    ; NOCOMMIT -- convert to `tru` or something
+   (mbql.u/match-one clause
+     [:field (id :guard integer?) (_opts :guard :join-alias)]
+     (let [{field-alias :alias}   ref-info
+           {base-type :base_type} (qp.store/field id)]
+       [:field field-alias {:base-type base-type}])
+
+     [:field (field-name :guard string?) (opts :guard :join-alias)]
+     (let [{field-alias :alias} ref-info]
+       [:field field-alias (select-keys opts [:base-type])])
+
+     :field
+     clause
+
+     [:aggregation index]
+     (raise-source-query-aggregation-ref source-query index ref-info)
+
+     [:expression expression-name]
+     (raise-source-query-expression-ref source-query expression-name)
+
+     _
+     (throw (ex-info (tru "Don''t know how to raise {0}" (pr-str clause))
+                     {:clause clause})))))
+
 (defn- mbql-source-query-references
-  [{refs :qp/refs, aggregations :aggregation, :keys [expressions], :as source-query}]
+  [{refs :qp/refs, :as source-query}]
   (into
    {}
    (comp (filter (fn [[_clause info]]
@@ -121,24 +220,9 @@
          (map (fn [[clause info]]
                 [(normalize-clause clause) info]))
          (map (fn [[clause info]]
-                (let [clause (mbql.u/match-one clause
-                               :field
-                               &match
-
-                               [:aggregation index]
-                               (let [ag-clause              (get aggregations index)
-                                     {base-type :base_type} (annotate/col-info-for-aggregation-clause source-query ag-clause)]
-                                 [:field (:alias info) {:base-type (or base-type :type/*)}])
-
-                               [:expression expression-name]
-                               (let [expression-definition (get expressions (keyword expression-name))
-                                     {base-type :base_type} (some-> expression-definition annotate/infer-expression-type)]
-                                 [:field expression-name {:base-type (or base-type :type/*)}])
-
-                               _
-                               clause)
-                      info (-> info
-                               (assoc :source {:table ::source, :alias (:alias info)})
+                (let [clause (raise-source-query-field-or-ref source-query clause info)
+                      info   (-> info
+                                 (assoc :source {:table ::source, :alias (:alias info)})
                                (dissoc :position))]
                   [clause info]))))
    refs))
@@ -155,6 +239,11 @@
                                [clause (assoc info :position i)])))
           source-metadata)))
 
+(defn- source-query-references [source-query source-metadata]
+  (if (:native source-query)
+    (native-source-query-references source-query source-metadata)
+    (mbql-source-query-references source-query)))
+
 (defn- join-references [joins]
   (into
    {}
@@ -170,10 +259,10 @@
                        [:field id-or-name opts] [[:field id-or-name (assoc opts :join-alias join-alias)] info]
                        _                        [clause info]))))
          (map (fn [[clause info]]
-                [(normalize-clause clause) info])))
+                [(normalize-clause clause) (dissoc info :position)])))
    joins))
 
-(defn- uniquify-visible-ref-aliases [refs]
+(defn- uniquify-selected-references-aliases [refs]
   (let [unique-name (mbql.u/unique-name-generator)]
     (into
      {}
@@ -187,14 +276,6 @@
     (apply merge-with recursive-merge maps)
     (last maps)))
 
-(def ^:private QPRefs
-  ;; TODO -- ensure unique `:position` ?
-  ;; NOCOMMIT
-  {mbql.s/FieldOrAggregationReference s/Any #_{:alias                     su/NonBlankString
-                                               (s/optional-key :position) s/Int
-                                               (s/optional-key :source)   {:table su/NonBlankString
-                                                                           :alias su/NonBlankString}}})
-
 (s/defn ^:private add-references* :- {s/Keyword s/Any
                                       :qp/refs QPRefs}
   [{:keys [source-table source-query source-metadata joins]
@@ -202,19 +283,26 @@
     :as inner-query}]
   (let [refs (-> (recursive-merge
                   (add-alias-info (source-table-references source-table join-alias))
+                  (add-alias-info (expression-references inner-query))
                   (add-alias-info (selected-references inner-query))
-                  (mbql-source-query-references source-query)
-                  (native-source-query-references source-query source-metadata)
+                  (source-query-references source-query source-metadata)
                   (join-references joins))
-                 uniquify-visible-ref-aliases)]
+                 uniquify-selected-references-aliases)]
     (assoc inner-query :qp/refs refs)))
 
-(defn- remove-join-references [x]
+(defn- remove-join-references
+  "Remove `:qp/refs` key from the top level of a join map (these are not needed, and should not be used for things like
+  compiling join conditions -- use the parent query refs instead)."
+  [x]
   (mbql.u/replace x
     (m :guard (every-pred map? :alias :qp/refs))
     (remove-join-references (dissoc m :qp/refs))))
 
-(defn add-references [query]
+(defn add-references
+  "Walk `query` and add `:qp/refs` keys at all levels. `:qp/refs` is a map of 'visible' Field/aggregation
+  reference/expression reference -> alias info for that level of the query. Use [[field-ref-info]] to get the matching
+  info for a given Field clause."
+  [query]
   (let [query (walk/postwalk
                (fn [form]
                  (if (and (map? form)

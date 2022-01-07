@@ -657,8 +657,9 @@
 (defn add-column-info
   "Middleware for adding type information about the columns in the query results (the `:cols` key)."
   [qp]
-  (fn [{query-type :type, :as query
-        {:keys [:metadata/dataset-metadata]} :info} rff context]
+  (fn [{query-type                          :type
+        {:metadata/keys [dataset-metadata]} :info
+        :as                                 query} rff context]
     (qp
      query
      (fn [metadata]

@@ -106,10 +106,6 @@
   [joins]
   (reduce concat (filter sequential? (map :fields joins))))
 
-(defn- remove-joins-fields [joins]
-  (vec (for [join joins]
-         (dissoc join :fields))))
-
 (defn- should-add-join-fields?
   "Should we append the `:fields` from `:joins` to the parent-level query's `:fields`? True unless the parent-level
   query has breakouts or aggregations."
@@ -124,8 +120,7 @@
   parent level, because we should only be returning the ones from the ags and breakouts in the final results."
   [{:keys [joins], :as inner-query} :- UnresolvedMBQLQuery]
   (let [join-fields (when (should-add-join-fields? inner-query)
-                      (joins->fields joins))
-        inner-query (update inner-query :joins remove-joins-fields)]
+                      (joins->fields joins))]
     (cond-> inner-query
       (seq join-fields) (update :fields (comp vec distinct concat) join-fields))))
 
