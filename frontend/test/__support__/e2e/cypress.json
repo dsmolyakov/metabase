@@ -3,6 +3,7 @@
   "pluginsFile": "frontend/test/__support__/e2e/cypress-plugins.js",
   "integrationFolder": ".",
   "supportFile": "frontend/test/__support__/e2e/cypress.js",
+  "video": false,
   "videoUploadOnPasses": false,
   "viewportHeight": 800,
   "viewportWidth": 1280,
