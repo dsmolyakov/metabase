@@ -5,6 +5,9 @@
             [metabase.query-processor.store :as qp.store]
             [metabase.query-processor.error-type :as qp.error-type]))
 
+;; TODO -- we should probably do clause normalization here so this doesn't break if we have extra info like the stuff we
+;; add here
+
 (defn- selected-clauses [{:keys [fields breakout aggregation]}]
   (into
    {}
@@ -41,24 +44,28 @@
                                  ::source-alias field-name}
                                 (when-let [position (clause->position &match)]
                                   {::desired-alias field-name
-                                   ::position position}))]
+                                   ::position      position}))]
 
       [:field (id :guard integer?) opts]
       (let [{table-id :table_id, field-name :name} (qp.store/field id)
+            {:keys [join-alias]}                   opts
+            join-is-this-level?                    (some-> join-alias this-level-joins)
             table                                  (cond
-                                                     (= table-id source-table)
-                                                     table-id
-
-                                                     (some-> (:join-alias opts) this-level-joins)
-                                                     (:join-alias opts)
-
-                                                     :else ::source)]
+                                                     (= table-id source-table) table-id
+                                                     join-is-this-level?       join-alias
+                                                     :else                     ::source)
+            source-alias                           (if (and join-alias (not join-is-this-level?))
+                                                     (format "%s__%s" join-alias field-name)
+                                                     field-name)
+            desired-alias                          (if join-alias
+                                                     (format "%s__%s" join-alias field-name)
+                                                     field-name)]
         [:field id (merge opts
                           {::source-table table
-                           ::source-alias field-name}
+                           ::source-alias source-alias}
                           (when-let [position (clause->position &match)]
-                            {::desired-alias field-name
-                             ::position position}))])
+                            {::desired-alias desired-alias
+                             ::position      position}))])
 
       [:aggregation index]
       (let [position (clause->position &match)]

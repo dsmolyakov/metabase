@@ -32,16 +32,21 @@
                                 :fields       [[:field %id {::add/source-table  $$venues
                                                             ::add/source-alias  "ID"
                                                             ::add/desired-alias "ID"
-                                                            ::add/position      0}]]}
+                                                            ::add/position      0}]
+                                               [:field %categories.name {:join-alias         "Cat"
+                                                                         ::add/source-table  "Cat"
+                                                                         ::add/source-alias  "NAME"
+                                                                         ::add/desired-alias "Cat__NAME"
+                                                                         ::add/position      1}]]}
                  :breakout     [[:field %categories.name {:join-alias         "Cat"
                                                           ::add/source-table  ::add/source
-                                                          ::add/source-alias  "NAME"
-                                                          ::add/desired-alias "NAME"
+                                                          ::add/source-alias  "Cat__NAME"
+                                                          ::add/desired-alias "Cat__NAME"
                                                           ::add/position      0}]]
                  :order-by     [[:asc [:field %categories.name {:join-alias         "Cat"
                                                                 ::add/source-table  ::add/source
-                                                                ::add/source-alias  "NAME"
-                                                                ::add/desired-alias "NAME"
+                                                                ::add/source-alias  "Cat__NAME"
+                                                                ::add/desired-alias "Cat__NAME"
                                                                 ::add/position      0}]]]
                  :limit        1})
               (add-alias-info
@@ -51,6 +56,7 @@
                                                  :source-table $$categories
                                                  :alias        "Cat"
                                                  :condition    [:= $category_id &Cat.categories.id]}]
-                                 :fields       [$id]}
+                                 :fields       [$id
+                                                &Cat.categories.name]}
                   :breakout     [&Cat.categories.name]
                   :limit        1})))))

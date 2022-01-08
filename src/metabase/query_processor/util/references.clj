@@ -105,8 +105,8 @@
                  (or (field-ref-info-dwim query clause)
                      (log/warn (str/join \newline
                                          [(tru "Cannot find a match for {0}" (u/colorize 'red (pr-str clause)))
-                                          (tru "in query:")
-                                          (u/pprint-to-str 'yellow query)]))))
+                                          #_(tru "in query:")
+                                          #_(u/pprint-to-str 'yellow query)]))))
       ;; NOCOMMIT
       #_(println (u/pprint-to-str 'yellow clause) '-> (u/pprint-to-str 'cyan <>)))))
 

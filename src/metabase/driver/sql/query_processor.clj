@@ -10,6 +10,7 @@
             [metabase.driver.common :as driver.common]
             [metabase.mbql.schema :as mbql.s]
             [metabase.mbql.util :as mbql.u]
+            [metabase.query-processor.util.add-alias-info :as add]
             [metabase.models.field :as field :refer [Field]]
             [metabase.models.table :refer [Table]]
             [metabase.query-processor.error-type :as qp.error-type]
@@ -49,7 +50,7 @@
   0)
 
 ;; This is mainly for use by other drivers -- AFAIK only [[metabase.driver.sqlserver]] actually uses it
-(def ^:dynamic *field-options*
+(def ^:dynamic ^{:deprecated "0.42.0"} *field-options*
   "Bound to the `options` part of a `:field` clause when that clause is being compiled to HoneySQL. Useful if you store
   additional keys there and need to access them."
   nil)
@@ -390,48 +391,28 @@
       (hx/* bin-width)
       (hx/+ min-value)))
 
-(defn- field-ref-info [clause]
-  (refs/field-ref-info *query* clause))
-
 (defmethod ->honeysql [:sql :field]
-  [driver [_ field-id-or-name options :as field-clause]]
-  (let [ref-info         (field-ref-info field-clause)
-        source-alias     (get-in ref-info [:source :alias])
-        table-alias      (get-in ref-info [:source :table])
-        table-alias      (if (= table-alias ::refs/source)
-                           source-query-alias
-                           table-alias)
-        ;; field-id-or-name (or (:alias ref-info)
-        ;;                      field-id-or-name)
-        options          (cond-> options
-                           source-alias (assoc ::source-alias source-alias)
-                           table-alias  (assoc ::table-alias table-alias))]
-    #_(println "(pr-str field-clause):" (pr-str field-clause)) ; NOCOMMIT
-    #_(println "(pr-str ref-info):" (pr-str ref-info))         ; NOCOMMIT
-    (u/prog1
-      (try
-        (binding [*field-options* options
-                  *table-alias*   table-alias]
-          (let [honeysql-form (if (integer? field-id-or-name)
-                                (let [field (qp.store/field field-id-or-name)]
-                                  (->honeysql driver (assoc field
-                                                      ::options                 options
-                                                      ::nest-query/outer-select (contains? options ::nest-query/outer-select)
-                                                      ::source-alias            source-alias
-                                                      ::table-alias             table-alias)))
-                                (cond-> (->honeysql driver (hx/identifier :field table-alias (or source-alias field-id-or-name)))
-                                  (:database-type options) (hx/with-database-type-info (:database-type options))))]
-            (cond->> honeysql-form
-              (:temporal-unit options) (apply-temporal-bucketing driver options)
-              (:binning options)       (apply-binning options))))
-        (catch Throwable e
-          (throw (ex-info (tru "Error compiling :field clause: {0}" (ex-message e))
-                          {:clause   field-clause
-                           :ref-info ref-info
-                           :refs     (:qp/refs *query*)}
-                          e))))
-      #_(println " =>" (u/pprint-to-str <>)) ; NOCOMMIT
-      )))
+  [driver [_ id-or-name {:keys [database-type], ::add/keys [source-table source-alias desired-alias], :as options} :as field-clause]]
+  (try
+    (let [table-alias (cond
+                        (= source-table ::add/source) source-query-alias
+                        (integer? source-table)       (:name (qp.store/table source-table))
+                        :else                         source-table)]
+      (binding [*field-options* options
+                *table-alias*   table-alias]
+        (let [field         (when (integer? id-or-name)
+                              (qp.store/field id-or-name))
+              database-type (or database-type
+                                (:database_type field))
+              honeysql-form (cond-> (->honeysql driver (hx/identifier :field table-alias source-alias))
+                              database-type (hx/with-database-type-info database-type))]
+          (cond->> honeysql-form
+            (:temporal-unit options) (apply-temporal-bucketing driver options)
+            (:binning options)       (apply-binning options)))))
+    (catch Throwable e
+      (throw (ex-info (tru "Error compiling :field clause: {0}" (ex-message e))
+                      {:clause field-clause}
+                      e)))))
 
 (defmethod ->honeysql [:sql :count]
   [driver [_ field]]
@@ -982,7 +963,7 @@
 (defn mbql->honeysql
   "Build the HoneySQL form we will compile to SQL and execute."
   [driver {inner-query :query}]
-  (let [inner-query (refs/add-references inner-query)]
+  (let [inner-query (add/add-alias-info inner-query)]
     (u/prog1 (apply-clauses driver {} (preprocess-query driver inner-query))
       (when-not i/*disable-qp-logging*
         (log/tracef "\nHoneySQL Form: %s\n%s" (u/emoji "🍯") (u/pprint-to-str 'cyan <>))))))
