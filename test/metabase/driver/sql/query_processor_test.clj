@@ -471,7 +471,7 @@
                                 &CategoriesStats.*MaxPrice/Integer
                                 &CategoriesStats.*AvgPrice/Integer
                                 &CategoriesStats.*MinPrice/Integer]
-                  :expressions {:RelativePrice [:/ $price &CategoriesStats.*AvgPrice/Integer]}
+                  :expressions {"RelativePrice" [:/ $price &CategoriesStats.*AvgPrice/Integer]}
                   :joins       [{:strategy     :left-join
                                  :condition    [:= $category_id &CategoriesStats.venues.category_id]
                                  :source-query {:source-table $$venues
@@ -488,18 +488,32 @@
 (deftest expressions-and-coercions-test
   (mt/test-drivers (conj (sql-jdbc.tu/sql-jdbc-drivers) :bigquery)
     (testing "Don't cast in both inner select and outer select when expression (#12430)"
-      (let [price-field-id (mt/id :venues :price)]
-        (mt/with-temp-vals-in-db Field price-field-id {:coercion_strategy :Coercion/UNIXSeconds->DateTime
-                                                       :effective_type    :type/DateTime}
-          (let [results (qp/process-query {:database   (mt/id)
-                                           :query      {:source-table (mt/id :venues)
-                                                        :expressions  {:test ["*" 1 1]}
-                                                        :fields       [[:field price-field-id nil]
-                                                                       [:expression "test"]]}
-                                           :type       "query"})]
-            (is (schema= [(s/one s/Str "date")
-                          (s/one s/Num "expression")]
-                         (-> results mt/rows first)))))))))
+      (mt/with-temp-vals-in-db Field (mt/id :venues :price) {:coercion_strategy :Coercion/UNIXSeconds->DateTime
+                                                             :effective_type    :type/DateTime}
+        (let [query (mt/mbql-query venues
+                      {:expressions {:test ["*" 1 1]}
+                       :fields      [$price
+                                     [:expression "test"]]
+                       :limit       1})]
+          (testing "Generated SQL"
+            (is (= '{:select [source.PRICE AS PRICE
+                              source.test AS test]
+                     :from   [{:select [VENUES.ID AS ID
+                                        VENUES.NAME AS NAME
+                                        VENUES.CATEGORY_ID AS CATEGORY_ID
+                                        VENUES.LATITUDE AS LATITUDE
+                                        VENUES.LONGITUDE AS LONGITUDE timestampadd
+                                        ("second" VENUES.PRICE timestamp "1970-01-01T00:00:00Z") AS PRICE
+                                        (1 * 1) AS test]
+                               :from   [VENUES]}
+                              source]
+                     :limit  [1]}
+                   (-> query mbql->native sql.qp-test-util/sql->sql-map)))
+            (testing "Results"
+              (let [results (qp/process-query query)]
+                (is (schema= [(s/one s/Str "date")
+                              (s/one s/Num "expression")]
+                             (-> results mt/rows first)))))))))))
 
 (deftest nested-mbql-source-query-test
   (is (= '{:select    [VENUES.ID AS ID

@@ -11,7 +11,8 @@
             [metabase.util :as u]
             [metabase.util.i18n :refer [trs tru]]
             [metabase.util.schema :as su]
-            [schema.core :as s]))
+            [schema.core :as s]
+            [medley.core :as m]))
 
 (def ^:private QPRefs
   (-> {mbql.s/FieldOrAggregationReference {:alias                     su/NonBlankString
@@ -49,7 +50,8 @@
     (mbql.u/is-clause? :field clause)
     (mbql.u/update-field-options (comp remove-namespaced-options
                                        remove-default-temporal-unit
-                                       #(dissoc % :source-field)))))
+                                       #(dissoc % :source-field)
+                                       #_#(m/update-existing % :base-type (constantly :type/*))))))
 
 (defn- find-qp-refs-info [{:qp/keys [refs], :keys [source-query joins]}]
   (cons
@@ -60,58 +62,53 @@
     (when (seq joins)
       (mapcat find-qp-refs-info joins)))))
 
-(declare raise-source-query-field-or-ref)
+(defn- maybe-update-field-options [clause f & args]
+  (mbql.u/match-one clause
+    [:field id-or-name opts]
+    ;; don't use [[mbql.u/update-field-options]] here because we don't want it to enforce constraints like field-literal
+    ;; clauses having to have `:base-type`
+    [:field id-or-name (not-empty (apply f opts args))]))
 
-(defn- field-ref-info-dwim [query clause]
+(defn- field-ref-info-dwim
+  "If there's no exact match for a `clause` try to find something that's reasonably close (e.g. by ignoring
+  `:base-type`)."
+  [query clause]
   (or (get-in query [:qp/refs clause])
 
-      ;; see if there's a match for the field w/ name clause
-      (when-let [literal (mbql.u/match-one clause
-                           [:field (id :guard integer?) opts]
-                           (let [field (qp.store/field id)]
-                             [:field (:name field) (assoc opts :base-type (:base_type field))]))]
-        (when-let [literal-match (field-ref-info-dwim query literal)]
-          (log/warn (trs "Using match for :field literal clause {0}" (u/colorize 'yellow literal-match)))
-          literal-match))
+      (letfn [(matching-clause-with-options-xform [f & args]
+                (when-let [clause' (apply maybe-update-field-options clause f args)]
+                  (when-not (= clause clause')
+                    (some (fn [[a-clause info]]
+                            (when-let [a-clause' (apply maybe-update-field-options a-clause f args)]
+                              (when (= clause' a-clause')
+                                (log/warn (trs "Using close match {0} {1}" (u/colorize 'cyan (pr-str a-clause)) (u/colorize 'yellow info)))
+                                (assert info)
+                                info)))
+                          (:qp/refs query)))))]
+        ;; look for a match with a different `:base-type` but everything else the same. Sometimes we'll have slight
+        ;; differences in expression types or whatever in clauses that get raised
+        (matching-clause-with-options-xform dissoc :base-type)
 
-      ;; look for ref info in the source query and in joins and use that if it matches
-      (some (fn [refs]
-              (when-let [ref-info (get refs clause)]
-                (let [fixed {:alias (:alias ref-info), :source {:table ::source, :alias (:alias ref-info)}}]
-                  (log/warn (trs "Using ref info from a source query: {0}" (u/colorize 'yellow (pr-str fixed))))
-                  fixed)))
-            (find-qp-refs-info query))
-
-      ;; TODO -- should we also try without binning options?
-      ;;
-      ;; HACK HACK HACK HACK just use the closest match if we can't find anything else.
-      (when-let [[closest-match info] (mbql.u/match-one clause
-                                        [:field id-or-name _]
-                                        (some (fn [[a-clause info]]
-                                                (mbql.u/match-one a-clause
-                                                  [:field an-id-or-name _]
-                                                  (when (= an-id-or-name id-or-name)
-                                                    [a-clause info])))
-                                              (:qp/refs query)))]
-        (log/warn (trs "Using close match {0} {1}" (u/colorize 'cyan (pr-str closest-match)) (u/colorize 'yellow info)))
-        info)))
+        ;; look for a match without consideration for options at all if all else fails.
+        (matching-clause-with-options-xform (constantly nil)))))
 
 (defn field-ref-info
   "Get the matching `:qp/refs` info for a `:field`/`:expression`/`:aggregation` clause in `query`."
-  [query clause]
+  [{:keys [source-query], :as query} clause]
   ;; this error should (hopefully) only ever be dev-facing, so it's not i18n'ed
   (when (:strategy query)
     (throw (ex-info "Bad field ref info lookup: got join when expecting a query"
                     {:query query, :clause clause})))
   (let [clause (normalize-clause clause)]
-    (or (get-in query [:qp/refs clause])
-        (do
-          (log/warn (trs "No exact field ref info match for {0}" (u/colorize 'red (pr-str clause))))
-          (field-ref-info-dwim query clause)
-          (log/warn (str/join \newline
-                              [(tru "Cannot find a match for {0}" (u/colorize 'red (pr-str clause)))
-                               (tru "in query:")
-                               (u/pprint-to-str 'yellow query)]))))))
+    (u/prog1 (or (get-in query [:qp/refs clause])
+                 (log/warn (trs "No exact field ref info match for {0}" (u/colorize 'red (pr-str clause))))
+                 (or (field-ref-info-dwim query clause)
+                     (log/warn (str/join \newline
+                                         [(tru "Cannot find a match for {0}" (u/colorize 'red (pr-str clause)))
+                                          (tru "in query:")
+                                          (u/pprint-to-str 'yellow query)]))))
+      ;; NOCOMMIT
+      #_(println (u/pprint-to-str 'yellow clause) '-> (u/pprint-to-str 'cyan <>)))))
 
 (defn- source-table-references [source-table-id join-alias]
   (when source-table-id
@@ -141,8 +138,15 @@
                   [:field (id :guard integer?) _opts]
                   (let [field      (qp.store/field id)
                         field-name (:name field)]
-                    [clause (cond-> (assoc info :alias field-name)
-                              (:source info) (assoc-in [:source :alias] field-name))])
+                    #_[clause (cond-> (assoc info :alias field-name)
+                                (:source info) (assoc-in [:source :alias] field-name))]
+                    [clause  (cond-> info
+                               (not (:alias info))
+                               (assoc :alias field-name)
+
+                               (and (:source info)
+                                    (not (get-in info [:source :alias])))
+                               (assoc-in [:source :alias] field-name))])
 
                   [:field (field-name :guard string?) _opts]
                   [clause (assoc info
@@ -151,10 +155,13 @@
 
                   _
                   [clause info])))
+         ;; for all Fields with `:join-alias` info, add appropriate `:source` info to the ref info
          (map (fn [[clause info]]
                 [clause (mbql.u/match-one clause
                           [:field _ (opts :guard :join-alias)]
-                          (assoc info :source {:table (:join-alias opts), :alias (:alias info)})
+                          #_(assoc info :source {:table (:join-alias opts), :alias (:alias info)})
+                          (cond-> info
+                            (not (:source info)) (assoc :source {:table (:join-alias opts), :alias (:alias info)}))
 
                           _ info)])))
    refs))
@@ -170,7 +177,7 @@
                 [(normalize-clause clause) info])))
    expressions))
 
-(defn- selected-references [{:keys [fields breakout aggregation source-table]}]
+(defn- selected-references [{:keys [fields breakout aggregation source-table source-query]}]
   (into
    {}
    (comp cat
@@ -183,6 +190,12 @@
                   [:expression expression-name]
                   [[:expression expression-name] {:alias expression-name}]
 
+                  [:field _id-or-name (_opts :guard :temporal-unit)]
+                  (let [field-without-temporal-unit (mbql.u/update-field-options clause dissoc :temporal-unit)
+                        source-info                 (get-in source-query [:qp/refs field-without-temporal-unit])
+                        source-info                 (when source-info {:alias  (:alias source-info)
+                                                                       :source {:table ::source, :alias (:alias source-info)}})]
+                    [clause source-info])
                   _
                   [clause])))
          (map-indexed
@@ -253,16 +266,21 @@
   [{refs :qp/refs, :as source-query}]
   (into
    {}
-   (comp (filter (fn [[_clause info]]
-                   (:position info)))
+   (comp #_(filter (fn [[_clause info]]
+                     (:position info)))
          (map (fn [[clause info]]
                 [(normalize-clause clause) info]))
          (map (fn [[clause info]]
                 (let [clause (raise-source-query-field-or-ref source-query clause info)
                       info   (-> info
                                  (assoc :source {:table ::source, :alias (:alias info)})
-                               (dissoc :position))]
-                  [clause info]))))
+                                 (dissoc :position))]
+                  [clause info])))
+         ;; TODO -- I'm not sure whether we should be doing this or not.
+         #_(map (fn [[clause info]]
+                [(cond-> clause
+                   (mbql.u/is-clause? :field clause) (mbql.u/update-field-options dissoc :temporal-unit :binning))
+                 info])))
    refs))
 
 (defn- native-source-query-references [source-query source-metadata]
@@ -273,7 +291,7 @@
                                                                     :source {:table ::source, :alias field-name}}]))
                 (map (fn [[clause info]]
                        [(normalize-clause clause) info]))
-                (map-indexed (fn [i [clause info]]
+                #_(map-indexed (fn [i [clause info]]
                                [clause (assoc info :position i)])))
           source-metadata)))
 

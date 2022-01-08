@@ -135,6 +135,41 @@
                                                                          :alias        "P2"}]}}]}))
                             [:query :qp/refs])))))))
 
+(deftest join-in-source-query-correct-ref-info-test
+  (testing (str "It's legal to use a Field with `:join-alias` if the join happens in the source query, but the ref "
+                "info should reflect that and have correct :source")
+    (is (query= (mt/mbql-query venues
+                  {:source-query {:source-table $$venues
+                                  :joins        [{:source-table $$categories
+                                                  :alias        "Cat"
+                                                  :strategy     :left-join
+                                                  :condition    [:= $id &Cat.categories.id]
+                                                  :fields       [&Cat.categories.id]}]
+                                  :fields       [$id
+                                                 &Cat.categories.name]
+                                  :qp/refs      {$id                  {:alias "ID", :position 0}
+                                                 $name                {:alias "NAME"}
+                                                 $category_id         {:alias "CATEGORY_ID"}
+                                                 $latitude            {:alias "LATITUDE"}
+                                                 $longitude           {:alias "LONGITUDE"}
+                                                 $price               {:alias "PRICE"}
+                                                 &Cat.categories.id   {:alias "Cat__ID", :source {:table "Cat", :alias "ID"}}
+                                                 &Cat.categories.name {:source {:table "Cat", :alias "NAME"}, :alias "Cat__NAME", :position 1}}}
+                   :fields       [$id &Cat.categories.name]
+                   :qp/refs      {$id                  {:position 0, :alias "ID", :source {:table ::refs/source, :alias "ID"}}
+                                  &Cat.categories.name {:position 1, :alias "Cat__NAME", :source {:table ::refs/source, :alias "Cat__NAME"}}}})
+                (add-references
+                 (mt/mbql-query venues
+                   {:source-query {:source-table $$venues
+                                   :joins        [{:source-table $$categories
+                                                   :alias        "Cat"
+                                                   :strategy     :left-join
+                                                   :condition    [:= $id &Cat.categories.id]
+                                                   :fields       [&Cat.categories.id]}]
+                                   :fields       [$id
+                                                  &Cat.categories.name]}
+                    :fields       [$id &Cat.categories.name]}))))))
+
 (deftest join-in-source-query-test
   (is (query= (mt/mbql-query venues
                 {:source-query {:source-table $$venues
@@ -401,7 +436,7 @@
                    :joins       [{:strategy     :left-join
                                   :condition    [:= $category_id &CategoriesStats.category_id]
                                   :source-query {:source-table $$venues
-                                                 :aggregation  [[:aggregation-options [:max $price] {:name "MaxPrice"}]
+                                                 :aggregation  [[:aggregation-options [:max $price] {:name "MaxPrice/"}]
                                                                 [:aggregation-options [:avg $price] {:name "AvgPrice"}]
                                                                 [:aggregation-options [:min $price] {:name "MinPrice"}]]
                                                  :breakout     [$category_id]}
@@ -479,7 +514,58 @@
                   qp/query->preprocessed
                   add-references))))
 
-(deftest mega-query-refs-test
+(deftest source-query-references-joins-test
+  (testing "Make sure `:field` clause with `:join-info` whose join is in the source query has correct `:source` info"
+    (is (query= (mt/$ids venues
+                  {&Cat.categories.id   {:alias "Cat__ID", :source {:alias "Cat__ID", :table ::refs/source}}
+                   &Cat.categories.name {:position 0, :alias "Cat__NAME", :source {:alias "Cat__NAME", :table ::refs/source}}
+                   $id                  {:alias "ID", :source {:table ::refs/source, :alias "ID"}}
+                   $name                {:alias "NAME", :source {:table ::refs/source, :alias "NAME"}}
+                   $category_id         {:alias "CATEGORY_ID", :source {:table ::refs/source, :alias "CATEGORY_ID"}}
+                   $latitude            {:alias "LATITUDE", :source {:table ::refs/source, :alias "LATITUDE"}}
+                   $longitude           {:alias "LONGITUDE", :source {:table ::refs/source, :alias "LONGITUDE"}}
+                   $price               {:alias "PRICE", :source {:table ::refs/source, :alias "PRICE"}}})
+                (-> (mt/mbql-query venues
+                      {:source-query {:source-table $$venues
+                                      :joins        [{:strategy     :left-join
+                                                      :source-table $$categories
+                                                      :alias        "Cat"
+                                                      :condition    [:= $category_id &Cat.categories.id]}]
+                                      :fields       [$id]}
+                       :breakout     [&Cat.categories.name]})
+                    qp/query->preprocessed
+                    add-references
+                    :query
+                    :qp/refs)))))
+
+(deftest source-query-references-joins-test-2
+  (testing "`:field` joined against the source query with datetime bucketing should have correct `:source` info"
+    (is (query= (mt/$ids venues
+                  {&C.checkins.id         {:alias "C__ID", :source {:alias "C__ID", :table ::refs/source}}
+                   !year.&C.checkins.date {:position 0, :alias "C__DATE", :source {:alias "C__DATE", :table ::refs/source}}
+                   &C.checkins.date       {:alias "C__DATE", :source {:alias "C__DATE", :table ::refs/source}}
+                   &C.checkins.venue_id   {:alias "C__VENUE_ID", :source {:alias "C__VENUE_ID", :table ::refs/source}}
+                   &C.checkins.user_id    {:alias "C__USER_ID", :source {:alias "C__USER_ID", :table ::refs/source}}
+                   $id                    {:alias "ID", :source {:table ::refs/source, :alias "ID"}}
+                   $name                  {:alias "NAME", :source {:table ::refs/source, :alias "NAME"}}
+                   $category_id           {:alias "CATEGORY_ID", :source {:table ::refs/source, :alias "CATEGORY_ID"}}
+                   $latitude              {:alias "LATITUDE", :source {:table ::refs/source, :alias "LATITUDE"}}
+                   $longitude             {:alias "LONGITUDE", :source {:table ::refs/source, :alias "LONGITUDE"}}
+                   $price                 {:alias "PRICE", :source {:table ::refs/source, :alias "PRICE"}}})
+                (-> (mt/mbql-query venues
+                      {:source-query {:source-table $$venues
+                                      :joins        [{:strategy     :left-join
+                                                      :source-table $$checkins
+                                                      :alias        "C"
+                                                      :condition    [:= $id &C.checkins.venue_id]}]
+                                      :fields       [$id]}
+                       :breakout     [!year.&C.checkins.date]})
+                    qp/query->preprocessed
+                    add-references
+                    :query
+                    :qp/refs)))))
+
+#_(deftest mega-query-refs-test
   (testing "Should generate correct SQL for joins against source queries that contain joins (#12928)"
     (mt/dataset sample-dataset
       (is (= '{:fields

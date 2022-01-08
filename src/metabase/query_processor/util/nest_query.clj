@@ -27,21 +27,26 @@
         (dissoc :source-table :source-metadata :joins)
         (assoc :source-query source))))
 
-(defn- rewrite-expressions-and-joined-fields-as-field-literals [query]
+(defn- rewrite-fields-and-expressions [query]
   (mbql.u/replace query
     [:expression expression-name]
     (refs/raise-source-query-field-or-ref query &match)
 
-    [:field id-or-name (opts :guard :join-alias)]
-    (let [{field-alias :alias} (refs/field-ref-info query &match)]
-      (assert field-alias)
-      [:field field-alias {:base-type :type/Integer}])
+    ;; mark all Fields at the new top level as `::outer-select` so QP implementations know not to apply coercion or
+    ;; whatever to them a second time.
+    [:field _id-or-name (_opts :guard :temporal-unit)]
+    (mbql.u/update-field-options &match assoc ::outer-select true)
+
+    ;; [:field id-or-name (opts :guard :join-alias)]
+    ;; (let [{field-alias :alias} (refs/field-ref-info query &match)]
+    ;;   (assert field-alias)
+    ;;   [:field field-alias {:base-type :type/Integer}])
 
     ;; when recursing into joins use the refs from the parent level.
     (m :guard (every-pred map? :joins))
     (let [{:keys [joins]} m]
       (-> (dissoc m :joins)
-          rewrite-expressions-and-joined-fields-as-field-literals
+          rewrite-fields-and-expressions
           (assoc :joins (mapv (fn [join]
                                 (assoc join :qp/refs (:qp/refs query)))
                               joins))))
@@ -50,8 +55,22 @@
     (m :guard (every-pred map? :source-query))
     (let [{:keys [source-query]} m]
       (-> (dissoc m :source-query)
-          rewrite-expressions-and-joined-fields-as-field-literals
+          rewrite-fields-and-expressions
           (assoc :source-query source-query)))))
+
+#_(defn- raise-join-info [])
+
+#_(defn- update-join-ref-info [refs]
+  (into
+   {}
+   (fn [[clause info]]
+     [clause (mbql.u/match-one clause
+               [:field _id-or-name (_opts :guard :join-alias)]
+               (raise-join-info info)
+
+               _
+               info)])
+   refs))
 
 (defn nest-expressions
   "Pushes the `:source-table`/`:source-query`, `:expressions`, and `:joins` in the top-level of the query into a
@@ -62,7 +81,7 @@
     query
     (let [query                               (-> query
                                                   ensure-refs
-                                                  rewrite-expressions-and-joined-fields-as-field-literals)
+                                                  rewrite-fields-and-expressions)
           {:keys [source-query], :as query}   (nest-source query)
           source-query                        (assoc source-query :expressions expressions)
           {:qp/keys [refs], :as source-query} (refs/add-references source-query)]
@@ -70,4 +89,5 @@
           (dissoc :source-query :expressions)
           (assoc :source-query source-query)
           ;; update references.
-          refs/add-references))))
+          refs/add-references
+          #_(update :qp/refs update-join-ref-info)))))
